@@ -97,6 +97,24 @@ with sync_playwright() as p:
     pg.fill("#void-reason", "uji batal"); pg.click("[data-action=void-confirm]"); pg.wait_for_selector(".toast-good >> text=Kejadian dibatalkan.")
     print("after void:", pg.inner_text("h1"))
 
+    # Ubah: receiving SS 10 -> 8 ditolak (sudah di-QC), QC Pass MM 5 -> 4 berhasil
+    def edit_row(kind, size):
+        return pg.locator(f"tr:not(.voided):has-text('{kind}')").filter(has=pg.locator(f"td.mono >> text='{size}'")).locator("[data-action=edit-start]").first
+    edit_row("Barang datang", "SS").click()
+    pg.fill("#ed-qty", "8"); pg.click("[data-action=edit-save]")
+    pg.wait_for_selector("[data-msg=edit] [data-inline-msg]")
+    assert in_view(pg, "[data-inline-msg]")
+    print("edit blocked:", pg.inner_text("[data-inline-msg]"))
+    pg.click("[data-action=edit-cancel]")
+    edit_row("QC Pass", "MM").click()
+    pg.fill("#ed-qty", "4"); pg.fill("#ed-reason", "salah hitung"); pg.click("[data-action=edit-save]")
+    pg.wait_for_selector(".toast-good >> text=Perubahan disimpan.")
+    assert pg.locator("tr:not(.voided) .pill-info:text('Koreksi')").count() == 1
+    assert pg.locator("text=Diubah oleh Bagus, alasan: salah hitung").count() == 1
+    print("after edit:", pg.inner_text("h1").replace("\n", " "), "| menunggu QC:", pg.inner_text(".kpis-sm .kpi:nth-child(3) .kpi-v"))
+    pg.locator("tr.edit-row, .tbl-hist").first.scroll_into_view_if_needed()
+    pg.screenshot(path=OUT + "s4b_history_edit.png", full_page=True)
+
     # cetak: 2 lembar
     pg.click("[data-action=print]")
     pg.wait_for_selector(".sheet")

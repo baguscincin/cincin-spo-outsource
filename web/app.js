@@ -80,7 +80,7 @@
 
   function go(view, orderId) {
     st.view = view; st.orderId = orderId || null; st.act = null; st.confirm = null; st.voiding = null;
-    st.error = null; st.msgAt = null; st.quickItem = null;
+    st.error = null; st.msgAt = null; st.quickItem = null; st.editing = null;
     if (view === "edit") st.draft = makeDraft(orderId);
     render(); window.scrollTo(0, 0);
   }
@@ -399,7 +399,7 @@
       </section>
       ${o.status === "OPEN" ? actionPanel(x) : `<div class="msg msg-good">Semua qty sudah lulus QC atau diselesaikan dengan diskon. Order selesai.</div>`}
       <section class="card"><h2 class="card-t">Saldo per ukuran</h2>${lines.map((l) => balanceTable(l, bal)).join("")}</section>
-      <section class="card"><h2 class="card-t">Riwayat</h2><p class="hint">Salah input? Klik "Batalkan" di baris yang salah, lalu catat ulang yang benar.</p>${historyTable(events, lines)}</section>`;
+      <section class="card"><h2 class="card-t">Riwayat</h2><p class="hint">Salah input? Klik "Ubah" di baris yang salah untuk mengoreksi qty, ukuran, tanggal, atau catatan. Klik "Batalkan" kalau kejadian itu sama sekali tidak terjadi.</p>${historyTable(events, lines)}</section>`;
   }
 
   function balanceTable(l, bal) {
@@ -551,16 +551,43 @@
     return `<div class="table-wrap"><table class="tbl tbl-hist"><thead><tr><th>Tanggal</th><th>Kejadian</th><th>SKU</th><th>Size</th><th class="num">Qty</th><th class="num">Potongan</th><th>Oleh</th><th>Catatan</th><th></th></tr></thead>
       <tbody>${list.map((e) => {
         const v = !!e.voided_at;
-        const row = `<tr class="${v ? "voided" : ""}"><td class="nowrap">${S.fmtDate(e.event_date)}</td><td>${typePill(e.event_type)}</td>
+        const edited = v && /^Diubah/.test(e.void_reason || "");
+        const vNote = !v ? "" : edited
+          ? `<div class="small muted">Diubah oleh ${esc(e.voided_by || "")}${e.void_reason.length > 6 ? ", alasan" + esc(e.void_reason.slice(6)) : ""}. Lihat baris koreksinya.</div>`
+          : `<div class="small bad-text">Dibatalkan ${esc(e.voided_by || "")}: ${esc(e.void_reason || "")}</div>`;
+        const row = `<tr class="${v ? "voided" : ""}${st.editing === e.id ? " is-editing" : ""}"><td class="nowrap">${S.fmtDate(e.event_date)}</td><td>${typePill(e.event_type)}${e.replaces_id ? ` ${pill("Koreksi", "info")}` : ""}</td>
           <td class="mono">${esc((lineBy[e.line_id] || {}).sku || "")}</td><td class="mono">${esc(e.size_code)}</td><td class="num">${S.qty(e.qty)}</td>
           <td class="num nowrap">${e.amount ? S.money(e.amount) : ""}</td><td>${esc(e.recorded_by)}</td>
-          <td class="note-cell">${esc(e.note || "")}${v ? `<div class="small bad-text">Dibatalkan ${esc(e.voided_by || "")}: ${esc(e.void_reason || "")}</div>` : ""}</td>
-          <td>${v ? "" : `<button class="link small" data-action="void-start" data-id="${e.id}">Batalkan</button>`}</td></tr>`;
+          <td class="note-cell">${esc(e.note || "")}${vNote}</td>
+          <td class="nowrap">${v ? "" : `<button class="link small" data-action="edit-start" data-id="${e.id}">Ubah</button> · <button class="link small danger-text" data-action="void-start" data-id="${e.id}">Batalkan</button>`}</td></tr>`;
+        if (st.editing === e.id) return row + editRow(e, lineBy[e.line_id] || { sizes: {} });
         const form = st.voiding === e.id ? `<tr class="void-row"><td colspan="9" data-msg="void"><div class="void-form">
           <label class="field grow" for="void-reason"><span class="field-l">Kenapa dibatalkan? (wajib)</span><input id="void-reason" class="input" data-bind="voidReason" value="${esc(st.voidReason || "")}" placeholder="Misalnya salah ketik qty"></label>
           <button class="btn btn-danger" data-action="void-confirm" data-id="${e.id}">Ya, batalkan</button><button class="btn btn-ghost" data-action="void-cancel">Tidak jadi</button></div>${inlineMsg("void")}</td></tr>` : "";
         return row + form;
       }).join("")}</tbody></table></div>`;
+  }
+
+  // Form koreksi satu kejadian, tampil tepat di bawah barisnya.
+  function editRow(e, line) {
+    const f = st.editForm;
+    const sizes = Object.keys(line.sizes).sort((a, b) => (st.idx.sizeSort[a] ?? 99) - (st.idx.sizeSort[b] ?? 99));
+    const field = (id, label, inner) => `<label class="field" for="${id}"><span class="field-l">${label}</span>${inner}</label>`;
+    return `<tr class="edit-row"><td colspan="9" data-msg="edit"><div class="edit-form">
+      <strong>Koreksi ${esc((S.EVENT_TYPES[e.event_type] || {}).label || e.event_type)} ${esc(line.sku || "")}</strong>
+      <div class="edit-fields">
+        ${e.event_type.startsWith("QC_") ? field("ed-type", "Hasil QC", `<select id="ed-type" class="input" data-bind="editForm.event_type">${QC_ROWS.map(([t, lbl]) => `<option value="${t}"${t === f.event_type ? " selected" : ""}>${lbl}</option>`).join("")}</select>`) : ""}
+        ${field("ed-size", "Ukuran", `<select id="ed-size" class="input" data-bind="editForm.size_code">${sizes.map((s) => `<option${s === f.size_code ? " selected" : ""}>${esc(s)}</option>`).join("")}</select>`)}
+        ${field("ed-qty", "Qty", `<input id="ed-qty" class="input num w-m" inputmode="decimal" value="${esc(f.qty)}" data-bind="editForm.qty">`)}
+        ${e.event_type === "DAMAGE_DISCOUNT" ? field("ed-amt", "Potongan (Rp)", `<input id="ed-amt" class="input num w-m" inputmode="decimal" value="${esc(f.amount)}" data-bind="editForm.amount">`) : ""}
+        ${field("ed-date", "Tanggal", `<input id="ed-date" class="input" type="date" value="${esc(f.event_date)}" data-bind="editForm.event_date">`)}
+        <label class="field grow" for="ed-note"><span class="field-l">Catatan</span><input id="ed-note" class="input" value="${esc(f.note)}" data-bind="editForm.note"></label>
+        <label class="field grow" for="ed-reason"><span class="field-l">Alasan koreksi (boleh kosong)</span><input id="ed-reason" class="input" value="${esc(f.reason)}" data-bind="editForm.reason" placeholder="Misalnya salah ketik qty"></label>
+      </div>
+      ${inlineMsg("edit")}
+      <div class="actions"><button class="btn btn-primary" data-action="edit-save" data-id="${e.id}">Simpan perubahan</button><button class="btn btn-ghost" data-action="edit-cancel">Batal</button>
+        <span class="hint">Data lama tetap tersimpan di riwayat sebagai "Diubah".</span></div>
+    </div></td></tr>`;
   }
 
   // ------------------------------------------------------------------
@@ -999,7 +1026,24 @@
         if (ok) { st.act = null; render(); }
         break;
       }
-      case "void-start": st.voiding = b.dataset.id; st.voidReason = ""; render(); break;
+      case "edit-start": {
+        const e = x.events.find((ev2) => ev2.id === b.dataset.id);
+        st.voiding = null; st.editing = e.id;
+        st.editForm = { event_type: e.event_type, size_code: e.size_code, qty: String(e.qty), amount: String(e.amount || 0),
+          event_date: e.event_date, note: e.note || "", reason: "" };
+        render(); document.getElementById("ed-qty")?.focus(); break;
+      }
+      case "edit-cancel": st.editing = null; render(); break;
+      case "edit-save": {
+        const f = st.editForm;
+        if (!(num(f.qty) > 0)) { failHere(b, "Qty harus lebih dari 0. Kalau kejadian ini tidak pernah terjadi, pakai Batalkan."); break; }
+        const changes = { event_type: f.event_type, size_code: f.size_code, qty: num(f.qty), event_date: f.event_date, note: f.note };
+        if (f.event_type === "DAMAGE_DISCOUNT") changes.amount = num(f.amount);
+        const ok = await run(() => st.store.editEvent(b.dataset.id, changes, f.reason, st.user).then(() => true), "Perubahan disimpan.");
+        if (ok) { st.editing = null; render(); }
+        break;
+      }
+      case "void-start": st.voiding = b.dataset.id; st.editing = null; st.voidReason = ""; render(); break;
       case "void-cancel": st.voiding = null; render(); break;
       case "void-confirm": {
         const ok = await run(() => st.store.voidEvent(b.dataset.id, st.voidReason || "", st.user).then(() => true), "Kejadian dibatalkan.");

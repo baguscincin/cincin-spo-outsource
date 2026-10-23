@@ -231,6 +231,33 @@
       this._commit(s);
       return st;
     }
+
+    // Sama dengan spo_edit_event: event lama ditandai "Diubah", event baru menggantikannya.
+    async editEvent(eventId, changes, reason, by) {
+      if (!String(by || "").trim()) throw new Error("Nama pencatat wajib diisi");
+      const s = clone(this.state);
+      const e = s.events.find((x) => x.id === eventId && !x.voided_at);
+      if (!e) throw new Error("Kejadian tidak ditemukan atau sudah dibatalkan");
+      const type = changes.event_type || e.event_type, size = changes.size_code || e.size_code;
+      const qty = changes.qty === undefined || changes.qty === "" ? e.qty : SPO.r2(changes.qty);
+      if (!(qty > 0)) throw new Error("Qty harus lebih dari 0. Kalau mau menghapus, pakai Batalkan.");
+      if (type !== e.event_type && !(type.startsWith("QC_") && e.event_type.startsWith("QC_")))
+        throw new Error("Jenis kejadian hanya bisa diganti sesama hasil QC (Pass, Reject, Damaged)");
+      const l = s.lines.find((x) => x.id === e.line_id);
+      if (!l || !(Number(l.sizes[size]) > 0)) throw new Error("Ukuran " + size + " tidak ada di item ini");
+      const why = String(reason || "").trim();
+      Object.assign(e, { voided_at: nowIso(), voided_by: by, void_reason: "Diubah" + (why ? ": " + why : "") });
+      s.events.push({ id: uid(), order_id: e.order_id, line_id: e.line_id, size_code: size, event_type: type, qty,
+        amount: type === "DAMAGE_DISCOUNT" ? SPO.r2(changes.amount === undefined || changes.amount === "" ? e.amount : changes.amount) : 0,
+        event_date: changes.event_date || e.event_date, batch_id: e.batch_id,
+        note: "note" in changes ? changes.note || "" : e.note, recorded_by: by, created_at: nowIso(),
+        voided_at: null, voided_by: null, void_reason: null, replaces_id: e.id });
+      let st;
+      try { st = this._refresh(s, e.order_id); }
+      catch (err) { throw new Error("Tidak bisa diubah: " + err.message.replace(/\.$/, "") + ". Kemungkinan qty ini sudah dipakai kejadian berikutnya (misalnya sudah di-QC). Ubah kejadian yang lebih baru dulu."); }
+      this._commit(s);
+      return st;
+    }
   }
 
   window.LocalStore = LocalStore;

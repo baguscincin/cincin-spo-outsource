@@ -14,7 +14,9 @@ Terpisah total dari SP Creator Excel dan dari website inventory butik.
 6. **Damaged**: tetap ditunggu gantinya dari vendor, atau diselesaikan dengan **Diskon damaged** (potongan harga).
 7. Order otomatis **Completed** kalau semua qty sudah Pass atau diselesaikan dengan diskon.
 
-Salah input? Batalkan kejadiannya di Riwayat (wajib isi alasan). Data tidak pernah dihapus, hanya ditandai dibatalkan.
+Salah input? Klik **Ubah** di Riwayat untuk koreksi qty, ukuran, tanggal, catatan, atau hasil QC.
+Data lama tetap tersimpan sebagai "Diubah" dan data baru diberi tanda "Koreksi".
+Kalau kejadiannya sama sekali tidak terjadi, pakai **Batalkan** (wajib isi alasan). Data tidak pernah dihapus.
 
 ### Rumus saldo per line per size
 

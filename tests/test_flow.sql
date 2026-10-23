@@ -33,6 +33,20 @@ select spo_void_event(:'ev2','salah input','Bagus');
 select status from spo_orders where id=:'id';
 -- reopen should fail
 select spo_reopen(:'id','Bagus');
+-- edit: SS receive 10 -> 8 harus ditolak (sudah di-QC)
+select id as ev3 from spo_events where size_code='SS' and event_type='RECEIVE' and voided_at is null \gset
+select spo_edit_event(:'ev3','{"qty":8}'::jsonb,null,'Bagus');
+-- edit: SS QC_DAMAGED 1 -> QC_REJECT harus ditolak (damaged sudah diganti diskon)
+select id as ev4 from spo_events where size_code='SS' and event_type='QC_DAMAGED' and voided_at is null \gset
+select spo_edit_event(:'ev4','{"event_type":"QC_REJECT"}'::jsonb,'salah pilih','Lina');
+-- edit: RECEIVE jadi QC_PASS harus ditolak (beda jenis)
+select spo_edit_event(:'ev3','{"event_type":"QC_PASS"}'::jsonb,null,'Bagus');
+-- edit: MM receive 5 -> 4 berhasil (MM pass sudah dibatalkan di atas, jadi menunggu QC 5)
+select id as ev5 from spo_events where size_code='MM' and event_type='RECEIVE' and voided_at is null \gset
+select spo_edit_event(:'ev5','{"qty":4,"note":"koreksi"}'::jsonb,'salah hitung','Rista');
+select event_type, size_code, qty, note, voided_at is not null as voided, void_reason, replaces_id is not null as is_fix
+  from spo_events where size_code='MM' and event_type='RECEIVE' order by created_at;
+select size_code, received, awaiting_qc, can_receive from spo_balances where order_id=:'id' order by size_sort;
 -- direct delete of event blocked by RLS (0 rows)
 delete from spo_events;
 select count(*) from spo_events;

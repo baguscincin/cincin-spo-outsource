@@ -98,7 +98,8 @@ create table spo_events (
   created_at    timestamptz not null default now(),
   voided_at     timestamptz,
   voided_by     text,
-  void_reason   text
+  void_reason   text,
+  replaces_id   uuid references spo_events(id)               -- diisi kalau event ini hasil "Ubah" dari event lain
 );
 create index spo_events_order_idx on spo_events(order_id);
 create index spo_events_line_size_idx on spo_events(line_id, size_code);
@@ -341,6 +342,50 @@ begin
     raise exception 'Tidak bisa dibatalkan karena qty ini sudah dipakai kejadian berikutnya (%). Batalkan kejadian yang lebih baru dulu.', sqlerrm;
   end;
   return spo_refresh_status(v_order);
+end $$;
+
+-- Ubah event (koreksi salah input) dalam satu langkah: event lama ditandai batal
+-- dengan alasan "Diubah", lalu event baru dibuat dengan replaces_id = event lama.
+-- p_changes: {size_code?, event_type?, qty?, amount?, event_date?, note?}
+-- Jenis event hanya boleh berganti sesama hasil QC (Pass / Reject / Damaged).
+create or replace function spo_edit_event(p_event_id uuid, p_changes jsonb, p_reason text, p_by text)
+returns text language plpgsql as $$
+declare v_e spo_events; v_type text; v_size text; v_qty numeric; v_new uuid;
+begin
+  if coalesce(trim(p_by),'') = '' then raise exception 'Nama pencatat wajib diisi'; end if;
+  select * into v_e from spo_events where id = p_event_id and voided_at is null;
+  if not found then raise exception 'Kejadian tidak ditemukan atau sudah dibatalkan'; end if;
+  perform 1 from spo_orders where id = v_e.order_id for update;
+
+  v_type := coalesce(nullif(p_changes->>'event_type',''), v_e.event_type);
+  v_size := coalesce(nullif(p_changes->>'size_code',''), v_e.size_code);
+  v_qty  := coalesce(nullif(p_changes->>'qty','')::numeric, v_e.qty);
+  if v_qty <= 0 then raise exception 'Qty harus lebih dari 0. Kalau mau menghapus, pakai Batalkan.'; end if;
+  if v_type <> v_e.event_type and not (v_type like 'QC\_%' and v_e.event_type like 'QC\_%') then
+    raise exception 'Jenis kejadian hanya bisa diganti sesama hasil QC (Pass, Reject, Damaged)';
+  end if;
+  if not exists (select 1 from spo_line_sizes where line_id = v_e.line_id and size_code = v_size) then
+    raise exception 'Ukuran % tidak ada di item ini', v_size;
+  end if;
+
+  update spo_events set voided_at = now(), voided_by = p_by,
+         void_reason = 'Diubah' || coalesce(': ' || nullif(trim(p_reason),''), '')
+   where id = p_event_id;
+  insert into spo_events (order_id, line_id, size_code, event_type, qty, amount, event_date,
+                          batch_id, note, recorded_by, replaces_id)
+  values (v_e.order_id, v_e.line_id, v_size, v_type, v_qty,
+          case when v_type = 'DAMAGE_DISCOUNT' then coalesce(nullif(p_changes->>'amount','')::numeric, v_e.amount) else 0 end,
+          coalesce(nullif(p_changes->>'event_date','')::date, v_e.event_date), v_e.batch_id,
+          case when p_changes ? 'note' then nullif(p_changes->>'note','') else v_e.note end,
+          p_by, p_event_id)
+  returning id into v_new;
+
+  begin
+    perform spo_check_balances(v_e.order_id);
+  exception when sqlstate 'P0001' then
+    raise exception 'Tidak bisa diubah: %. Kemungkinan qty ini sudah dipakai kejadian berikutnya (misalnya sudah di-QC). Ubah kejadian yang lebih baru dulu.', sqlerrm;
+  end;
+  return spo_refresh_status(v_e.order_id);
 end $$;
 
 -- ---------------------------------------------------------------------

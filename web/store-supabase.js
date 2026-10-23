@@ -94,6 +94,7 @@
       return this._rpc("spo_post_events", { p_order_id: orderId, p_events: events, p_event_date: date || null, p_note: note || null, p_by: by });
     }
     voidEvent(id, reason, by) { return this._rpc("spo_void_event", { p_event_id: id, p_reason: reason, p_by: by }); }
+    editEvent(id, changes, reason, by) { return this._rpc("spo_edit_event", { p_event_id: id, p_changes: changes, p_reason: reason || null, p_by: by }); }
   }
 
   window.SupabaseStore = SupabaseStore;
