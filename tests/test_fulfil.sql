@@ -27,6 +27,14 @@ select spo_import_bom('[{"style_sku":"S1983","component_sku":"O00123123","qty_pe
 select spo_import_bom('[{"style_sku":"S1983","component_sku":"O00123123","qty_per":"3","_row":2}]'::jsonb);
 select * from style_components order by 1,2;
 
+-- simpan BOM sekaligus untuk beberapa style (halaman detail style + "Terapkan ke warna lain")
+select spo_set_bom(array['S1983','S2000'], '[{"component_sku":"O00123123","qty_per":1},{"component_sku":"O00123124","qty_per":1}]'::jsonb);
+select * from style_components order by 1,2;
+select spo_set_bom(array['S1983'], '[{"component_sku":"OXXX","qty_per":1}]'::jsonb);   -- ditolak
+select spo_set_bom(array['S9999'], '[]'::jsonb);                                        -- ditolak
+select spo_set_bom(array['S2000'], '[]'::jsonb);                                        -- kosongkan BOM
+select style_sku, count(*) from style_components group by 1 order by 1;
+
 -- adjustment: qty 0 dan alasan kosong ditolak
 insert into stock_adjustments (sku, size_code, qty, reason, created_by) values ('O00123123','M',0,'x','Bagus');
 insert into stock_adjustments (sku, size_code, qty, reason, created_by) values ('O00123123','M',5,' ','Bagus');

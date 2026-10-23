@@ -106,6 +106,21 @@
     if (isNaN(dt)) return String(d);
     return dt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" });
   }
+  // Validasi baris BOM dari form: buang baris kosong, cek component ada, qty > 0, tidak dobel.
+  function cleanBomRows(rows, componentExists) {
+    const out = [], seen = new Set();
+    rows.forEach((r, i) => {
+      const sku = String(r.component_sku || "").trim().toUpperCase();
+      const q = String(r.qty_per ?? "").trim() === "" ? 1 : Number(String(r.qty_per).replace(",", "."));
+      if (!sku) return;
+      if (!componentExists(sku)) throw new Error(`Baris ${i + 1}: component ${sku} belum terdaftar. Tambahkan dulu di menu Component.`);
+      if (!(q > 0)) throw new Error(`Baris ${i + 1} (${sku}): qty harus lebih dari 0.`);
+      if (seen.has(sku)) throw new Error(`Component ${sku} muncul dua kali. Gabungkan jadi satu baris dengan qty totalnya.`);
+      seen.add(sku); out.push({ component_sku: sku, qty_per: r2(q) });
+    });
+    return out;
+  }
+
   // Format resmi untuk lembar cetak: 23 Oktober 2026
   function fmtDateLong(d) {
     if (!d) return "";
@@ -120,5 +135,5 @@
   }
 
   window.SPO = { EVENT_TYPES, STATUS, computeBalances, derive, checkBalances, isDone,
-                 lineQty, netUnitPrice, lineAmount, money, rp, qty, fmtDate, fmtDateLong, today, r2 };
+                 lineQty, netUnitPrice, lineAmount, money, rp, qty, fmtDate, fmtDateLong, today, r2, cleanBomRows };
 })();

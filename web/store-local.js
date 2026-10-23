@@ -308,6 +308,16 @@
       if (errs.length) throw new Error("Import dibatalkan. " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? `; dan ${errs.length - 5} lainnya` : ""));
       this._commit(s); return { added, updated };
     }
+    // Ganti seluruh BOM untuk satu atau beberapa style sekaligus (sama dengan spo_set_bom).
+    // rows: [{component_sku, qty_per}]. rows kosong = style tidak memakai component.
+    async setBom(styleSkus, rows) {
+      const s = clone(this.state);
+      const clean = SPO.cleanBomRows(rows, (sku) => s.items.some((x) => x.sku === sku));
+      for (const st of styleSkus) if (!s.styles.some((x) => x.sku === st)) throw new Error(`Style ${st} tidak ditemukan`);
+      s.bom = s.bom.filter((b) => !styleSkus.includes(b.style_sku));
+      for (const st of styleSkus) for (const r of clean) s.bom.push({ style_sku: st, component_sku: r.component_sku, qty_per: r.qty_per });
+      this._commit(s);
+    }
     async saveBom(styleSku, componentSku, qtyPer) { return this.importBom([{ style_sku: styleSku, component_sku: componentSku, qty_per: qtyPer, _row: 1 }]); }
     async deleteBom(styleSku, componentSku) {
       const s = clone(this.state);

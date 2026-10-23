@@ -84,6 +84,12 @@
       }, "SKU style dan Nama wajib diisi");
     }
     importBom(rows) { return this._rpc("spo_import_bom", { p_rows: rows }); }
+    async setBom(styleSkus, rows) {
+      const { data } = await this.sb.from("items").select("sku");
+      const have = new Set((data || []).map((r) => r.sku));
+      const clean = window.SPO.cleanBomRows(rows, (sku) => have.has(sku));   // pesan error ramah sebelum ke server
+      return this._rpc("spo_set_bom", { p_styles: styleSkus, p_rows: clean });
+    }
     saveBom(styleSku, componentSku, qtyPer) { return this.importBom([{ style_sku: styleSku, component_sku: componentSku, qty_per: String(qtyPer), _row: 1 }]); }
     async deleteBom(styleSku, componentSku) {
       const { error } = await this.sb.from("style_components").delete().match({ style_sku: styleSku, component_sku: componentSku });

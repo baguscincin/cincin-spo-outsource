@@ -82,9 +82,9 @@ with sync_playwright() as p:
         print("jira saved:", pg.inner_text(".toast-good"))
         # petakan S2098 (Cleo Cropped Top - Mod Pink) ke beading star x2
         pg.click("[data-view=styles]"); pg.fill("#s-q", "S2098")
-        pg.click("tr:has-text('S2098') [data-action=bom-edit]")
-        pg.fill("#bn-comp", "O00123123"); pg.fill("#bn-qty", "2"); pg.click("[data-action=bom-add]")
-        pg.wait_for_selector(".toast-good >> text=O00123123 ×2 ditambahkan ke S2098")
+        pg.click("tr.row-link:has-text('S2098')")
+        pg.fill("#br-0-comp", "O00123123"); pg.fill("#br-0-qty", "2"); pg.click("[data-action=bom-save]")
+        pg.wait_for_selector(".toast-good >> text=BOM S2098 disimpan: O00123123 ×2")
         pg.screenshot(path=OUT + "f6_style.png", full_page=True)
         pg.click("[data-view=fulfil]")
         print("KPI with jira:", [kpi(pg, i) for i in range(4)])

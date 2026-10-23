@@ -79,6 +79,9 @@
   }
 
   function go(view, orderId) {
+    if (st.view === "style" && view !== "style" && st.bomDraft && st.bomDraft.dirty &&
+        !window.confirm("BOM belum disimpan. Tinggalkan halaman ini? Perubahan akan hilang.")) return;
+    if (view !== "style") { st.bomDraft = null; st.newComp = null; }
     st.view = view; st.orderId = orderId || null; st.act = null; st.confirm = null; st.voiding = null;
     st.error = null; st.msgAt = null; st.quickItem = null; st.editing = null;
     if (view === "edit") st.draft = makeDraft(orderId);
@@ -118,7 +121,7 @@
   // ------------------------------------------------------------------
   function shell(inner) {
     const nav = [["orders", "SPO"], ["fulfil", "Fulfillment PO"], ["recap", "Rekap receiving"], ["items", "Component"], ["styles", "Style"], ["settings", "Settings"]];
-    const active = st.view === "edit" || st.view === "detail" ? "orders" : st.view;
+    const active = st.view === "edit" || st.view === "detail" ? "orders" : st.view === "style" ? "styles" : st.view;
     return `
       <header class="topbar">
         <div class="topbar-in">
@@ -779,15 +782,20 @@
       <section class="toolbar"><input id="c-q" class="input" type="search" placeholder="Cari SKU atau nama component…" value="${esc(st.compQ || "")}" data-bind="compQ"><span class="hint">${S.qty(list.length)} component</span></section>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>SKU</th><th>Nama</th><th>Unit</th><th class="num">Dipakai di</th><th>Status</th><th></th></tr></thead>
         <tbody>${list.length ? list.slice(0, 300).map((i) => `<tr><td class="mono strong">${esc(i.sku)}</td><td>${esc(i.description)}</td><td>${esc(i.unit)}</td>
-          <td class="num">${usedIn[i.sku] ? S.qty(usedIn[i.sku]) + " style" : `<span class="muted">belum</span>`}</td>
+          <td class="num">${usedIn[i.sku] ? `<button class="link" data-action="comp-used" data-sku="${esc(i.sku)}">${S.qty(usedIn[i.sku])} style</button>` : `<span class="muted">belum</span>`}</td>
           <td>${i.active ? pill("Aktif", "good") : pill("Nonaktif", "muted")}</td><td><button class="link" data-action="item-edit" data-sku="${esc(i.sku)}">Edit</button></td></tr>`).join("")
           : `<tr><td colspan="6" class="empty">Belum ada component. Import dari file atau tambahkan satu per satu di atas.</td></tr>`}</tbody></table></div>
       ${list.length > 300 ? `<p class="hint">Tampil 300 dari ${S.qty(list.length)}. Pakai pencarian untuk menemukan yang lain.</p>` : ""}`;
   }
 
   // ------------------------------------------------------------------
-  // STYLE dan pemetaan component
+  // STYLE: daftar, lalu halaman detail dengan Bill of Materials (mirip Cin7 Core, tanpa assembly)
   // ------------------------------------------------------------------
+  const compLabel = (i) => `${i.sku} — ${i.description}`;
+  // "O00123123 — Beading Star" atau "O00123123" -> "O00123123"
+  const compSkuOf = (label) => String(label || "").split(" — ")[0].trim().toUpperCase();
+  const modelOf = (name) => String(name || "").split(" - ")[0].trim().toLowerCase();   // "Sage Gown - Black" -> "sage gown"
+
   function stylesView() {
     const F = st.idx.ful, f = st.styleF || (st.styleF = { q: "", show: "ALL" });
     const bomBy = {}; st.data.bom.forEach((b) => (bomBy[b.style_sku] = bomBy[b.style_sku] || []).push(b));
@@ -799,51 +807,147 @@
       if (f.show === "MAPPED" && !bomBy[s.sku]) return false;
       if (f.show === "UNMAPPED" && bomBy[s.sku]) return false;
       if (f.show === "OPEN" && !openPcs[s.sku]) return false;
+      if (f.show === "OPEN_UNMAPPED" && (!openPcs[s.sku] || bomBy[s.sku])) return false;
+      if (f.comp && !(bomBy[s.sku] || []).some((b) => b.component_sku === f.comp)) return false;
       return !q || (s.sku + " " + s.name + " " + (s.range || "")).toLowerCase().includes(q);
     });
-    const seg = [["ALL", "Semua"], ["OPEN", "Ada di tiket menunggu"], ["MAPPED", "Sudah dipetakan"], ["UNMAPPED", "Belum dipetakan"]];
+    const seg = [["ALL", "Semua"], ["OPEN", "Ada di tiket menunggu"], ["OPEN_UNMAPPED", "Menunggu & belum ada BOM"], ["MAPPED", "Sudah ada BOM"], ["UNMAPPED", "Belum ada BOM"]];
     const chip = (b) => `<span class="chip"><span class="mono">${esc(b.component_sku)}</span> ${esc((itemBy[b.component_sku] || {}).description || "")} <b>×${S.qty(b.qty_per)}</b></span>`;
     return `
-      <section class="head-row"><div><h1>Style</h1><p class="sub">SKU produk jadi dari Jira. Petakan component outsource yang dipakai tiap style beserta jumlahnya per 1 pcs. Ukurannya otomatis sama: style M memakai component M.</p></div></section>
+      <section class="head-row"><div><h1>Style</h1><p class="sub">SKU produk jadi dari Jira. Klik style untuk mengatur Bill of Materials (BOM): component outsource yang dipakai per 1 pcs. Ukurannya otomatis sama: style M memakai component M.</p></div></section>
       <div class="two-col">
         ${importCard("style", "Import style", "Kolom: <b>SKU style</b>, <b>Nama style</b>, Range (boleh kosong). Style juga dibuat otomatis saat upload Jira.")}
-        ${importCard("bom", "Import pemetaan", "Kolom: <b>SKU style</b>, <b>SKU component</b>, Qty per pcs (kosong = 1). Bisa juga diatur satu per satu di tabel bawah.")}
+        ${importCard("bom", "Import BOM", "Kolom: <b>SKU style</b>, <b>SKU component</b>, Qty per pcs (kosong = 1). Satu baris per pasangan style dan component.")}
       </div>
       <section class="toolbar">
         <input id="s-q" class="input" type="search" placeholder="Cari SKU, nama, atau range…" value="${esc(f.q)}" data-bind="styleF.q">
         <div class="seg">${seg.map(([k, l]) => `<button class="seg-btn${f.show === k ? " is-active" : ""}" data-action="style-show" data-v="${k}">${l}</button>`).join("")}</div>
+        ${f.comp ? `<span class="chip">Memakai <b class="mono">${esc(f.comp)}</b> <button class="link small" data-action="style-comp-clear" aria-label="Hapus filter component">✕</button></span>` : ""}
         <span class="hint">${S.qty(list.length)} style</span>
       </section>
-      <div class="table-wrap"><table class="tbl"><thead><tr><th>SKU style</th><th>Nama</th><th>Component outsource</th><th class="num">Pcs di tiket menunggu</th><th></th></tr></thead>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>SKU style</th><th>Nama</th><th>BOM (component per 1 pcs)</th><th class="num">Pcs di tiket menunggu</th><th></th></tr></thead>
         <tbody>${list.length ? list.slice(0, 200).map((s) => {
           const comps = bomBy[s.sku] || [];
-          const row = `<tr class="${st.bomEdit === s.sku ? "is-editing" : ""}"><td class="mono strong nowrap">${esc(s.sku)}</td><td>${esc(s.name)}</td>
-            <td>${comps.length ? `<div class="chips">${comps.map(chip).join("")}</div>` : `<span class="muted">Bukan outsource / belum dipetakan</span>`}</td>
+          return `<tr class="row-link" data-action="style-open" data-sku="${esc(s.sku)}" tabindex="0"><td class="mono strong nowrap">${esc(s.sku)}</td><td>${esc(s.name)}</td>
+            <td>${comps.length ? `<div class="chips">${comps.map(chip).join("")}</div>` : `<span class="muted">Belum ada BOM</span>`}</td>
             <td class="num">${openPcs[s.sku] ? S.qty(openPcs[s.sku]) : ""}</td>
-            <td><button class="link" data-action="bom-edit" data-sku="${esc(s.sku)}">${st.bomEdit === s.sku ? "Tutup" : "Atur component"}</button></td></tr>`;
-          return row + (st.bomEdit === s.sku ? bomEditor(s, comps, itemBy) : "");
+            <td class="nowrap"><span class="link">${comps.length ? "Ubah BOM" : "Isi BOM"} →</span></td></tr>`;
         }).join("") : `<tr><td colspan="5" class="empty">Tidak ada style di filter ini. Import style atau upload file Jira dulu.</td></tr>`}</tbody></table></div>
-      ${list.length > 200 ? `<p class="hint">Tampil 200 dari ${S.qty(list.length)}. Pakai pencarian untuk menemukan yang lain.</p>` : ""}
-      <datalist id="dl-comp">${st.idx.items.filter((i) => i.active).map((i) => `<option value="${esc(i.sku)}">${esc(i.description)}</option>`).join("")}</datalist>`;
+      ${list.length > 200 ? `<p class="hint">Tampil 200 dari ${S.qty(list.length)}. Pakai pencarian untuk menemukan yang lain.</p>` : ""}`;
   }
 
-  function bomEditor(s, comps, itemBy) {
-    const n = st.bomNew || {};
-    return `<tr class="edit-row"><td colspan="5" data-msg="bom"><div class="edit-form">
-      <strong>Component untuk ${esc(s.sku)} ${esc(s.name)}</strong>
-      ${comps.length ? `<table class="tbl tbl-bom"><thead><tr><th>Component</th><th class="num">Qty per 1 pcs style</th><th></th></tr></thead><tbody>
-        ${comps.map((b) => `<tr><td><span class="mono strong">${esc(b.component_sku)}</span> ${esc((itemBy[b.component_sku] || {}).description || "")}</td>
-          <td class="num"><input id="bq-${esc(b.component_sku)}" class="input num w-q" inputmode="decimal" value="${esc(b.qty_per)}" data-bom-qty="${esc(b.component_sku)}" aria-label="Qty ${esc(b.component_sku)}"></td>
-          <td><button class="link small danger-text" data-action="bom-del" data-comp="${esc(b.component_sku)}">Hapus</button></td></tr>`).join("")}
-        </tbody></table>` : `<p class="hint">Belum ada component. Kalau style ini tidak memakai barang outsource, biarkan kosong.</p>`}
-      <div class="edit-fields">
-        <label class="field grow" for="bn-comp"><span class="field-l">Tambah component</span><input id="bn-comp" class="input mono" list="dl-comp" value="${esc(n.comp || "")}" data-bind="bomNew.comp" placeholder="Ketik SKU atau nama, lalu pilih" autocomplete="off"></label>
-        <label class="field" for="bn-qty"><span class="field-l">Qty per pcs</span><input id="bn-qty" class="input num w-q" inputmode="decimal" value="${esc(n.qty || "1")}" data-bind="bomNew.qty"></label>
-        <button class="btn btn-primary" data-action="bom-add">Tambah</button>
+  function makeBomDraft(sku) {
+    const itemBy = {}; st.data.items.forEach((i) => (itemBy[i.sku] = i));
+    const rows = st.data.bom.filter((b) => b.style_sku === sku)
+      .map((b) => ({ comp: itemBy[b.component_sku] ? compLabel(itemBy[b.component_sku]) : b.component_sku, qty: String(b.qty_per) }));
+    return { sku, rows: rows.length ? rows : [{ comp: "", qty: "1" }], dirty: false, copyFrom: "", apply: {} };
+  }
+
+  function bomRowsForSave() {
+    return st.bomDraft.rows.map((r) => ({ component_sku: compSkuOf(r.comp), qty_per: r.qty }));
+  }
+
+  function styleDetailView() {
+    const s = st.data.styles.find((x) => x.sku === st.styleSku);
+    if (!s) return `<p>Style tidak ditemukan.</p>`;
+    const d = st.bomDraft && st.bomDraft.sku === s.sku ? st.bomDraft : (st.bomDraft = makeBomDraft(s.sku));
+    const F = st.idx.ful;
+    const itemBy = {}; st.data.items.forEach((i) => (itemBy[i.sku] = i));
+    const saved = st.data.bom.filter((b) => b.style_sku === s.sku);
+    // tiket Jira untuk style ini
+    const waiting = (st.data.tickets || []).filter((t) => t.sku === s.sku && FUL.isOpen(t.status, F.consumeFrom));
+    const bySize = {}; waiting.forEach((t) => (bySize[t.size] = (bySize[t.size] || 0) + t.qty));
+    const sizes = Object.keys(bySize).sort((a, b) => (st.idx.sizeSort[a] ?? 99) - (st.idx.sizeSort[b] ?? 99));
+    const okPcs = waiting.filter((t) => F.result[t.key] && F.result[t.key].ok).reduce((a, t) => a + t.qty, 0);
+    // style lain dengan model yang sama (beda warna)
+    const siblings = st.data.styles.filter((x) => x.sku !== s.sku && modelOf(x.name) && modelOf(x.name) === modelOf(s.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const bomOf = (sku) => st.data.bom.filter((b) => b.style_sku === sku);
+    const withBom = st.data.styles.filter((x) => x.sku !== s.sku && bomOf(x.sku).length);
+    const nApply = Object.values(d.apply).filter(Boolean).length;
+
+    return `
+      <section class="head-row">
+        <div><button class="link back" data-action="nav" data-view="styles">← Semua style</button>
+          <h1><span class="mono">${esc(s.sku)}</span> ${esc(s.name)}</h1>
+          <p class="sub">${s.range ? "Range " + esc(s.range) + " · " : ""}${saved.length ? `BOM berisi ${saved.length} component` : "Belum ada BOM"}</p></div>
+      </section>
+
+      <section class="card bom-card" data-msg="bom">
+        <div class="card-head"><h2 class="card-title">Bill of Materials</h2>${d.dirty ? `<span class="pill pill-warn" id="bom-dirty">Belum disimpan</span>` : `<span class="pill pill-good" id="bom-dirty">Tersimpan</span>`}</div>
+        <p class="hint">Component outsource yang dipakai untuk membuat <b>1 pcs</b> style ini. Ukurannya ikut style: tiket ukuran M memakai component ukuran M.</p>
+        <div class="table-wrap"><table class="tbl tbl-bom-edit">
+          <thead><tr><th>#</th><th>Component</th><th class="num">Qty per 1 pcs</th><th>Unit</th><th></th></tr></thead>
+          <tbody>${d.rows.map((r, i) => {
+            const sku = compSkuOf(r.comp), it = itemBy[sku];
+            const note = !r.comp.trim() ? `<span class="small muted">Ketik nama atau SKU, lalu pilih dari daftar</span>`
+              : it ? `<span class="small good-text">✓ ${esc(it.sku)} · ${esc(it.description)}</span>`
+              : `<span class="small bad-text">Component "${esc(sku)}" belum terdaftar. Pilih dari daftar, atau buat baru di bawah.</span>`;
+            return `<tr><td class="muted">${i + 1}</td>
+              <td><input id="br-${i}-comp" class="input" list="dl-comp" value="${esc(r.comp)}" data-bomrow="${i}" data-f="comp" placeholder="contoh: beading" autocomplete="off" aria-label="Component baris ${i + 1}">
+                <div id="br-${i}-note">${note}</div></td>
+              <td class="num"><input id="br-${i}-qty" class="input num w-q" inputmode="decimal" value="${esc(r.qty)}" data-bomrow="${i}" data-f="qty" aria-label="Qty baris ${i + 1}"></td>
+              <td class="muted" id="br-${i}-unit">${esc(it ? it.unit : "")}</td>
+              <td><button class="icon-btn" data-action="bomrow-del" data-i="${i}" aria-label="Hapus baris ${i + 1}" title="Hapus baris">×</button></td></tr>`;
+          }).join("")}</tbody>
+        </table></div>
+        <div class="actions"><button class="btn btn-sm" data-action="bomrow-add">+ Tambah baris</button>
+          ${st.newComp ? "" : `<button class="link small" data-action="newcomp-open">Component belum ada? Buat baru</button>`}</div>
+        ${st.newComp ? `<div class="quick-item"><strong>Component baru</strong><div class="inline-add">
+          <label class="field" for="nc-sku"><span class="field-l">SKU</span><input id="nc-sku" class="input mono w-m" value="${esc(st.newComp.sku)}" data-bind="newComp.sku" placeholder="O00123123"></label>
+          <label class="field grow" for="nc-desc"><span class="field-l">Nama</span><input id="nc-desc" class="input" value="${esc(st.newComp.description)}" data-bind="newComp.description" placeholder="Beading Large"></label>
+          <button class="btn btn-primary" data-action="newcomp-save">Simpan component</button><button class="btn btn-ghost" data-action="newcomp-cancel">Batal</button></div></div>` : ""}
+        ${inlineMsg("bom")}
+        <div class="bom-foot">
+          <button class="btn btn-primary btn-lg" data-action="bom-save">Simpan BOM</button>
+          ${d.dirty ? `<button class="btn btn-ghost" data-action="bom-revert">Batalkan perubahan</button>` : ""}
+          <span class="hint">Kalau style ini tidak memakai barang outsource, kosongkan semua baris lalu Simpan.</span>
+        </div>
+      </section>
+
+      <div class="two-col">
+        <section class="card" data-msg="bom-copy">
+          <h2 class="card-t">Salin dari style lain</h2>
+          <p class="hint">Isi tabel di atas dengan BOM style lain, lalu periksa dan Simpan.</p>
+          ${withBom.length ? `<div class="inline-add"><input id="bc-from" class="input grow" list="dl-style-bom" value="${esc(d.copyFrom)}" data-bind="bomDraft.copyFrom" placeholder="Ketik nama atau SKU style" autocomplete="off">
+            <button class="btn" data-action="bom-copy">Salin ke tabel</button></div>
+            <datalist id="dl-style-bom">${withBom.map((x) => `<option value="${esc(x.sku)} — ${esc(x.name)}"></option>`).join("")}</datalist>`
+            : `<p class="muted small">Belum ada style lain yang punya BOM.</p>`}
+          ${inlineMsg("bom-copy")}
+        </section>
+        <section class="card" data-msg="bom-apply">
+          <h2 class="card-t">Terapkan ke warna lain</h2>
+          ${siblings.length ? `<p class="hint">Style dengan model yang sama ("${esc(s.name.split(" - ")[0])}"). BOM yang <b>sudah disimpan</b> di atas akan menggantikan BOM style yang dicentang.</p>
+            <div class="check-list">${siblings.map((x) => { const b = bomOf(x.sku); return `<label class="inline check" for="ap-${esc(x.sku)}"><input id="ap-${esc(x.sku)}" type="checkbox" data-apply="${esc(x.sku)}"${d.apply[x.sku] ? " checked" : ""}>
+              <span class="mono">${esc(x.sku)}</span> ${esc(x.name)} <span class="small muted">${b.length ? `(BOM: ${b.map((y) => esc(y.component_sku) + " ×" + S.qty(y.qty_per)).join(", ")})` : "(belum ada BOM)"}</span></label>`; }).join("")}</div>
+            <div class="actions"><button class="btn btn-sm" data-action="apply-all">Centang semua</button>
+              <button class="btn btn-primary" data-action="bom-apply"${nApply ? "" : " disabled"}>Terapkan ke ${nApply} style</button></div>`
+            : `<p class="muted small">Tidak ada style lain dengan nama model yang sama.</p>`}
+          ${inlineMsg("bom-apply")}
+        </section>
       </div>
-      ${inlineMsg("bom")}
-      <p class="hint">Ubah angka qty lalu klik di luar kotak untuk menyimpan. Contoh: style butuh 2 beading star per pcs, isi 2.</p>
-    </div></td></tr>`;
+
+      <section class="card">
+        <h2 class="card-t">Tiket Jira yang menunggu</h2>
+        ${waiting.length ? `<p>${S.qty(waiting.length)} tiket, ${S.qty(waiting.reduce((a, t) => a + t.qty, 0))} pcs menunggu. ${saved.length ? `<b>${S.qty(okPcs)} pcs</b> bisa dipenuhi dari stok saat ini.` : "Belum dihitung karena BOM masih kosong."}</p>
+          <div class="table-wrap"><table class="tbl tbl-bal"><thead><tr><th></th>${sizes.map((z) => `<th class="num">${esc(z)}</th>`).join("")}</tr></thead>
+          <tbody><tr><th scope="row">Pcs menunggu</th>${sizes.map((z) => `<td class="num">${S.qty(bySize[z])}</td>`).join("")}</tr></tbody></table></div>
+          ${saved.length ? `<div><button class="link" data-action="style-tickets" data-sku="${esc(s.sku)}">Lihat tiketnya di Fulfillment PO →</button></div>` : ""}`
+          : `<p class="muted">Tidak ada tiket Jira yang menunggu untuk style ini.</p>`}
+      </section>
+      <datalist id="dl-comp">${st.idx.items.filter((i) => i.active).map((i) => `<option value="${esc(compLabel(i))}"></option>`).join("")}</datalist>`;
+  }
+
+  // Perbarui keterangan baris BOM saat mengetik, tanpa menggambar ulang halaman.
+  function updateBomRowNote(i) {
+    const r = st.bomDraft.rows[i]; const sku = compSkuOf(r.comp);
+    const it = st.data.items.find((x) => x.sku === sku);
+    const note = document.getElementById(`br-${i}-note`), unit = document.getElementById(`br-${i}-unit`), dirty = document.getElementById("bom-dirty");
+    if (note) note.innerHTML = !r.comp.trim() ? `<span class="small muted">Ketik nama atau SKU, lalu pilih dari daftar</span>`
+      : it ? `<span class="small good-text">✓ ${esc(it.sku)} · ${esc(it.description)}</span>`
+      : `<span class="small bad-text">Component "${esc(sku)}" belum terdaftar. Pilih dari daftar, atau buat baru di bawah.</span>`;
+    if (unit) unit.textContent = it ? it.unit : "";
+    if (dirty) { dirty.textContent = "Belum disimpan"; dirty.className = "pill pill-warn"; }
   }
 
   // ------------------------------------------------------------------
@@ -866,10 +970,29 @@
     return `
       <section class="head-row"><div><h1>Fulfillment PO</h1><p class="sub">Upload export Jira, lalu website mengecek tiket yang memakai component outsource: bisa dipenuhi dari stok yang sudah lulus QC, atau masih back order. Urutannya FIFO, prioritas per PO bisa diubah.</p></div></section>
       ${importCard("jira", "Upload export Jira", `Kolom wajib: <b>Key, PO Number, SKU, Size, Status</b>. Upload file terbaru kapan saja; tiket yang sama akan diperbarui, tidak dobel.${last ? ` Upload terakhir: <b>${esc(last.filename || "")}</b>, ${S.fmtDate(last.at)} oleh ${esc(last.uploaded_by || "")}.` : ""}`)}
-      ${st.data.bom.length ? "" : `<div class="msg msg-bad">Belum ada style yang dipetakan ke component, jadi belum ada tiket yang dihitung. Atur di menu <button class="link" data-action="nav" data-view="styles">Style</button>.</div>`}
+      ${uploadSummary(F)}
       <section class="kpis">${kpis.map(([l, v, tone]) => `<div class="kpi${tone ? " kpi-" + tone : ""}"><div class="kpi-v">${v}</div><div class="kpi-l">${l}</div></div>`).join("")}</section>
       <div class="seg">${tabs.map(([k, l]) => `<button class="seg-btn${t.tab === k ? " is-active" : ""}" data-action="ful-tab" data-v="${k}">${l}</button>`).join("")}</div>
       ${body}`;
+  }
+
+  // Ringkasan semua tiket Jira yang tersimpan, termasuk yang belum dipetakan,
+  // supaya jelas datanya sudah masuk walau belum ada yang dihitung.
+  function uploadSummary(F) {
+    const all = st.data.tickets || [];
+    if (!all.length) return `<div class="msg msg-info">Belum ada tiket Jira. Upload export Jira di atas untuk mulai.</div>`;
+    const waiting = all.filter((t) => FUL.isOpen(t.status, F.consumeFrom));
+    const unmapped = waiting.filter((t) => !F.bom[t.sku]);
+    const styles = new Set(unmapped.map((t) => t.sku)).size;
+    const pos = (l) => new Set(l.map((t) => t.po_number)).size;
+    return `<section class="card summary-card">
+      <p><b>${S.qty(all.length)}</b> tiket Jira tersimpan dari <b>${S.qty(pos(all))}</b> PO.
+        <b>${S.qty(waiting.length)}</b> tiket masih menunggu (status di bawah ${esc(Number(F.consumeFrom).toFixed(1))}),
+        <b>${S.qty(F.open.length)}</b> di antaranya memakai component outsource dan dihitung di bawah.</p>
+      ${unmapped.length ? `<div class="msg msg-warn"><div><b>${S.qty(unmapped.length)} tiket menunggu</b> dari ${S.qty(pos(unmapped))} PO belum dihitung karena
+        style-nya (<b>${S.qty(styles)} style</b>) belum dipetakan ke component. Kalau style itu memang memakai barang outsource, petakan dulu.</div>
+        <div class="actions"><button class="btn btn-primary btn-sm" data-action="style-unmapped">Lihat style yang perlu dipetakan</button></div></div>` : ""}
+    </section>`;
   }
 
   function fulPoTab(F) {
@@ -943,7 +1066,7 @@
       .sort((a, b) => a.sku.localeCompare(b.sku) || (st.idx.sizeSort[a.size] ?? 99) - (st.idx.sizeSort[b.size] ?? 99));
     const a = st.adj || (st.adj = { sku: "", size_code: "", qty: "", reason: "" });
     const adjs = (st.data.adjustments || []).slice().sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
-    return `<p class="hint">Stok = lulus QC + adjustment − terpakai (tiket Jira yang sudah sampai status ${esc(String(F.consumeFrom))} ke atas). Sisa bebas = stok yang belum dialokasikan ke tiket mana pun.</p>
+    return `<p class="hint">Stok = lulus QC + adjustment − terpakai (tiket Jira yang sudah sampai status ${esc(Number(F.consumeFrom).toFixed(1))} ke atas). Sisa bebas = stok yang belum dialokasikan ke tiket mana pun.</p>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>Component</th><th>Size</th><th class="num">Lulus QC</th><th class="num">Adjustment</th><th class="num">Terpakai</th><th class="num">Stok</th><th class="num">Dialokasikan</th><th class="num">Sisa bebas</th></tr></thead>
         <tbody>${rows.length ? rows.map((s) => `<tr><td><span class="mono strong">${esc(s.sku)}</span> ${esc((itemBy[s.sku] || {}).description || "")}</td><td class="mono">${esc(s.size)}</td>
           <td class="num">${S.qty(s.qc_pass)}</td><td class="num">${s.adjust ? S.qty(s.adjust) : ""}</td><td class="num">${s.consumed ? S.qty(s.consumed) : ""}</td>
@@ -1115,7 +1238,7 @@
     if (st.view === "print") { $app.innerHTML = printView() + toasts(false); document.body.classList.add("is-print"); return; }
     document.body.classList.remove("is-print");
     const views = { orders: ordersView, edit: editorView, detail: detailView, recap: recapView, items: itemsView, settings: settingsView,
-      styles: stylesView, fulfil: fulfilView };
+      styles: stylesView, style: styleDetailView, fulfil: fulfilView };
     const inner = (views[st.view] || ordersView)();
     $app.innerHTML = shell(inner) + toasts(inner.includes("data-inline-msg"));
     if (st.view === "detail") updateActSums();
@@ -1146,6 +1269,10 @@
       if (/^(filter|recap|styleF|fulT)\.|^compQ$/.test(t.dataset.bind) && t.type !== "date") render();
       return;
     }
+    if (t.dataset.bomrow != null && st.bomDraft) {
+      const i = +t.dataset.bomrow; st.bomDraft.rows[i][t.dataset.f] = t.value; st.bomDraft.dirty = true;
+      updateBomRowNote(i); return;
+    }
     if (t.dataset.line != null && st.draft) {
       const l = st.draft.lines[+t.dataset.line];
       if (t.dataset.size) l.sizes[t.dataset.size] = t.value;
@@ -1159,10 +1286,7 @@
   $app.addEventListener("change", (ev) => {
     const t = ev.target;
     if (t.dataset.import) { handleImport(t.dataset.import, t); return; }
-    if (t.dataset.bomQty) {
-      st.msgAt = "bom"; const sku = st.bomEdit, comp = t.dataset.bomQty;
-      run(() => st.store.saveBom(sku, comp, num(t.value)), `Qty ${comp} untuk ${sku} disimpan.`); return;
-    }
+    if (t.dataset.apply && st.bomDraft) { st.bomDraft.apply[t.dataset.apply] = t.checked; render(); return; }
     if (t.dataset.consumeFrom != null) {
       st.msgAt = "ful-set"; run(() => st.store.saveAppSettings({ consume_from: Number(t.value) }), "Aturan status disimpan."); return;
     }
@@ -1358,17 +1482,61 @@
 
       // ---- style dan pemetaan ----
       case "style-show": st.styleF.show = b.dataset.v; render(); break;
-      case "bom-edit": st.bomEdit = st.bomEdit === b.dataset.sku ? null : b.dataset.sku; st.bomNew = { comp: "", qty: "1" }; render(); break;
-      case "bom-add": {
-        const comp = String((st.bomNew || {}).comp || "").trim().toUpperCase(), qty = num((st.bomNew || {}).qty || 1);
-        if (!comp) { failHere(b, "Ketik atau pilih SKU component dulu."); break; }
-        if (!st.data.items.some((i) => i.sku === comp)) { failHere(b, `Component ${comp} belum ada. Tambahkan dulu di menu Component.`); break; }
-        if (!(qty > 0)) { failHere(b, "Qty per pcs harus lebih dari 0."); break; }
-        const ok = await run(() => st.store.saveBom(st.bomEdit, comp, qty).then(() => true), `${comp} ×${S.qty(qty)} ditambahkan ke ${st.bomEdit}.`);
-        if (ok) { st.bomNew = { comp: "", qty: "1" }; render(); }
+      case "style-unmapped": st.styleF = { q: "", show: "OPEN_UNMAPPED" }; go("styles"); break;
+      case "style-open": st.styleSku = b.dataset.sku; st.bomDraft = makeBomDraft(b.dataset.sku); go("style"); break;
+      case "style-comp-clear": st.styleF.comp = ""; render(); break;
+      case "comp-used": st.styleF = { q: "", show: "ALL", comp: b.dataset.sku }; go("styles"); break;
+      case "style-tickets": Object.assign(st.fulT || (st.fulT = { tab: "po", po: "", res: "", q: "" }), { tab: "tickets", po: "", res: "", q: b.dataset.sku }); go("fulfil"); break;
+      case "bomrow-add": st.bomDraft.rows.push({ comp: "", qty: "1" }); st.bomDraft.dirty = true; render();
+        document.getElementById(`br-${st.bomDraft.rows.length - 1}-comp`)?.focus(); break;
+      case "bomrow-del": st.bomDraft.rows.splice(+b.dataset.i, 1); if (!st.bomDraft.rows.length) st.bomDraft.rows.push({ comp: "", qty: "1" });
+        st.bomDraft.dirty = true; render(); break;
+      case "bom-revert": st.bomDraft = makeBomDraft(st.styleSku); render(); break;
+      case "bom-save": {
+        let rows;
+        try { rows = S.cleanBomRows(bomRowsForSave(), (sku) => st.data.items.some((i) => i.sku === sku)); } catch (e) { failHere(b, e.message); break; }
+        const keep = st.bomDraft;
+        const ok = await run(() => st.store.setBom([st.styleSku], rows).then(() => true),
+          rows.length ? `BOM ${st.styleSku} disimpan: ${rows.map((r) => r.component_sku + " ×" + S.qty(r.qty_per)).join(", ")}.` : `BOM ${st.styleSku} dikosongkan.`);
+        if (ok) { st.bomDraft = makeBomDraft(st.styleSku); st.bomDraft.apply = keep.apply; render(); }
         break;
       }
-      case "bom-del": await run(() => st.store.deleteBom(st.bomEdit, b.dataset.comp), `${b.dataset.comp} dihapus dari ${st.bomEdit}.`); break;
+      case "bom-copy": {
+        const from = compSkuOf(st.bomDraft.copyFrom);
+        const src = st.data.bom.filter((x) => x.style_sku === from);
+        if (!src.length) { failHere(b, "Pilih style dari daftar yang muncul saat mengetik."); break; }
+        const itemBy = {}; st.data.items.forEach((i) => (itemBy[i.sku] = i));
+        st.bomDraft.rows = src.map((x) => ({ comp: itemBy[x.component_sku] ? compLabel(itemBy[x.component_sku]) : x.component_sku, qty: String(x.qty_per) }));
+        st.bomDraft.dirty = true; st.bomDraft.copyFrom = "";
+        setFlash(`BOM ${from} disalin ke tabel. Periksa, lalu klik Simpan BOM.`); render(); break;
+      }
+      case "apply-all": {
+        const s = st.data.styles.find((x) => x.sku === st.styleSku);
+        st.data.styles.forEach((x) => { if (x.sku !== s.sku && modelOf(x.name) === modelOf(s.name)) st.bomDraft.apply[x.sku] = true; });
+        render(); break;
+      }
+      case "bom-apply": {
+        if (st.bomDraft.dirty) { failHere(b, "Ada perubahan BOM yang belum disimpan. Klik Simpan BOM dulu, baru terapkan ke warna lain."); break; }
+        const targets = Object.keys(st.bomDraft.apply).filter((k) => st.bomDraft.apply[k]);
+        const rows = st.data.bom.filter((x) => x.style_sku === st.styleSku).map((x) => ({ component_sku: x.component_sku, qty_per: x.qty_per }));
+        const ok = await run(() => st.store.setBom(targets, rows).then(() => true), `BOM diterapkan ke ${targets.length} style: ${targets.join(", ")}.`);
+        if (ok) { st.bomDraft.apply = {}; render(); }
+        break;
+      }
+      case "newcomp-open": st.newComp = { sku: "", description: "" }; render(); document.getElementById("nc-sku")?.focus(); break;
+      case "newcomp-cancel": st.newComp = null; render(); break;
+      case "newcomp-save": {
+        const n = st.newComp;
+        const ok = await run(() => st.store.saveItem({ sku: n.sku, description: n.description, unit: "Each", active: true }).then(() => true));
+        if (ok) {
+          const it = st.data.items.find((i) => i.sku === String(n.sku).trim().toUpperCase());
+          let row = st.bomDraft.rows.find((r) => !r.comp.trim() || !st.data.items.some((i) => i.sku === compSkuOf(r.comp)));
+          if (!row) { row = { comp: "", qty: "1" }; st.bomDraft.rows.push(row); }
+          row.comp = compLabel(it); st.bomDraft.dirty = true; st.newComp = null;
+          setFlash(`Component ${it.sku} dibuat dan dimasukkan ke tabel. Klik Simpan BOM.`); render();
+        }
+        break;
+      }
 
       // ---- fulfillment ----
       case "ful-tab": st.fulT.tab = b.dataset.v; render(); break;

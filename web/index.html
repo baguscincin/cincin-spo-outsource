@@ -8,21 +8,22 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100,600;100,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=20261023e">
 </head>
 <body>
 <div id="app"></div>
-<script src="config.js"></script>
+<!-- ?v= di bawah: ganti angkanya setiap ada perubahan kode, supaya browser tidak memakai salinan lama -->
+<script src="config.js?v=20261023e"></script>
 <script>
   // Library Supabase hanya dimuat kalau config.js sudah diisi (mode produksi).
   if (window.SPO_CONFIG && window.SPO_CONFIG.SUPABASE_URL) {
     document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"><\/script>');
   }
 </script>
-<script src="shared.js"></script>
-<script src="fulfil.js"></script>
-<script src="store-local.js"></script>
-<script src="store-supabase.js"></script>
-<script src="app.js"></script>
+<script src="shared.js?v=20261023e"></script>
+<script src="fulfil.js?v=20261023e"></script>
+<script src="store-local.js?v=20261023e"></script>
+<script src="store-supabase.js?v=20261023e"></script>
+<script src="app.js?v=20261023e"></script>
 </body>
 </html>

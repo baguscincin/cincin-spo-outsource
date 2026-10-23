@@ -531,6 +531,27 @@ begin
   return jsonb_build_object('added', v_added, 'updated', v_upd);
 end $$;
 
+-- Ganti seluruh BOM untuk satu atau beberapa style sekaligus (halaman detail style,
+-- "Terapkan ke warna lain"). p_rows: [{component_sku, qty_per}]. Kosong = tanpa component.
+create or replace function spo_set_bom(p_styles text[], p_rows jsonb)
+returns int language plpgsql as $$
+declare v_bad text;
+begin
+  select s into v_bad from unnest(p_styles) s where s not in (select sku from styles) limit 1;
+  if v_bad is not null then raise exception 'Style % tidak ditemukan', v_bad; end if;
+  select r->>'component_sku' into v_bad from jsonb_array_elements(p_rows) r
+   where r->>'component_sku' not in (select sku from items) limit 1;
+  if v_bad is not null then raise exception 'Component % belum terdaftar', v_bad; end if;
+  if exists (select 1 from jsonb_array_elements(p_rows) r where coalesce((r->>'qty_per')::numeric, 0) <= 0) then
+    raise exception 'Qty per pcs harus lebih dari 0';
+  end if;
+  delete from style_components where style_sku = any(p_styles);
+  insert into style_components (style_sku, component_sku, qty_per)
+  select s, r->>'component_sku', (r->>'qty_per')::numeric
+  from unnest(p_styles) s cross join jsonb_array_elements(p_rows) r;
+  return array_length(p_styles, 1);
+end $$;
+
 -- ---------------------------------------------------------------------
 -- KEAMANAN (Supabase): hanya user yang login yang bisa membaca/menulis.
 -- Semua user login punya akses penuh (sesuai keputusan: semua orang bisa semua).
