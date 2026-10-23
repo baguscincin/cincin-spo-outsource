@@ -31,7 +31,7 @@ create table items (
 );
 
 insert into settings_sizes (code, sort) values
-  ('XXS',1),('XS',2),('SS',3),('MM',4),('LL',5),('XL',6),('XXL',7);
+  ('XXS',1),('XS',2),('S',3),('SM',4),('M',5),('ML',6),('L',7),('XL',8),('XXL',9),('OS',10);  -- sama dengan kode ukuran Jira
 
 insert into settings_locations (name) values ('Inspection'),('Cin Cin Studio');
 
@@ -389,6 +389,149 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
+-- FULFILLMENT PO: style, pemetaan component, tiket Jira, prioritas, adjustment
+-- Component = tabel items (barang outsource yang dipesan lewat SPO).
+-- Alokasi FIFO dihitung di browser (web/fulfil.js) dari data di bawah ini.
+-- ---------------------------------------------------------------------
+create table styles (
+  sku     text primary key,
+  name    text not null,
+  range   text,
+  active  boolean not null default true
+);
+
+-- 1 pcs style memakai qty_per pcs component dengan ukuran yang sama
+create table style_components (
+  style_sku      text not null references styles(sku) on delete cascade,
+  component_sku  text not null references items(sku),
+  qty_per        numeric(12,2) not null default 1 check (qty_per > 0),
+  primary key (style_sku, component_sku)
+);
+
+create table app_settings (
+  key    text primary key,
+  value  jsonb not null
+);
+insert into app_settings values ('consume_from', '3');   -- status Jira mulai memakai component
+
+create table jira_tickets (
+  key            text primary key,          -- CC-86618
+  ticket_number  text,
+  po_number      text not null,
+  customer_name  text,
+  customer_type  text,
+  created_date   date,
+  deadline       date,
+  sku            text not null,
+  item_name      text,
+  range          text,
+  qty            numeric(12,2) not null check (qty > 0),
+  size           text not null,
+  status         text not null,
+  seen_open      boolean not null default false,  -- pernah terlihat masih menunggu component
+  first_seen_at  timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+create index jira_tickets_po_idx on jira_tickets(po_number);
+
+create table jira_uploads (
+  id        uuid primary key default gen_random_uuid(),
+  filename  text,
+  rows      int not null,
+  added     int not null,
+  updated   int not null,
+  uploaded_by text,
+  at        timestamptz not null default now()
+);
+
+-- prioritas manual per PO (angka kecil = didahulukan). Kosong = FIFO murni.
+create table po_priority (
+  po_number  text primary key,
+  priority   int not null
+);
+
+create table stock_adjustments (
+  id          uuid primary key default gen_random_uuid(),
+  sku         text not null references items(sku),
+  size_code   text not null references settings_sizes(code),
+  qty         numeric(12,2) not null check (qty <> 0),   -- minus = mengurangi stok
+  reason      text not null check (trim(reason) <> ''),
+  created_by  text not null,
+  created_at  timestamptz not null default now(),
+  voided_at   timestamptz,
+  voided_by   text
+);
+
+-- Status "3.0. Sewing In Progress" -> 3.0. Masih menunggu component kalau < consume_from dan bukan 9.x.
+create or replace function jira_is_open(p_status text, p_consume_from numeric)
+returns boolean language sql immutable as $$
+  select coalesce((substring(p_status from '^\s*(\d+(?:\.\d+)?)'))::numeric < least(p_consume_from, 9), false)
+$$;
+
+-- Upload export Jira. p_rows: [{key, ticket_number, po_number, customer_name, customer_type, created_date,
+-- deadline, sku, item_name, range, qty, size, status}]. Upsert per key; style baru dibuat otomatis.
+create or replace function spo_upload_jira(p_rows jsonb, p_filename text, p_by text)
+returns jsonb language plpgsql as $$
+declare v_from numeric; v_added int; v_total int; v_styles int;
+begin
+  if coalesce(trim(p_by),'') = '' then raise exception 'Nama pencatat wajib diisi'; end if;
+  select (value #>> '{}')::numeric into v_from from app_settings where key = 'consume_from';
+  v_from := coalesce(v_from, 3);
+
+  create temp table _in on commit drop as
+  select * from jsonb_to_recordset(p_rows) as r(key text, ticket_number text, po_number text, customer_name text,
+    customer_type text, created_date date, deadline date, sku text, item_name text, range text, qty numeric, size text, status text);
+  select count(*) into v_total from _in;
+  select count(*) into v_added from _in where key not in (select key from jira_tickets);
+
+  insert into styles (sku, name, range)
+  select distinct on (sku) sku, coalesce(nullif(item_name,''), sku), nullif(range,'') from _in
+  where sku not in (select sku from styles) order by sku;
+  get diagnostics v_styles = row_count;
+
+  insert into jira_tickets as t (key, ticket_number, po_number, customer_name, customer_type, created_date, deadline,
+                                 sku, item_name, range, qty, size, status, seen_open)
+  select key, ticket_number, po_number, customer_name, customer_type, created_date, deadline,
+         sku, item_name, range, qty, size, status, jira_is_open(status, v_from) from _in
+  on conflict (key) do update set
+    ticket_number = excluded.ticket_number, po_number = excluded.po_number, customer_name = excluded.customer_name,
+    customer_type = excluded.customer_type, created_date = excluded.created_date, deadline = excluded.deadline,
+    sku = excluded.sku, item_name = excluded.item_name, range = excluded.range, qty = excluded.qty,
+    size = excluded.size, status = excluded.status, seen_open = t.seen_open or excluded.seen_open, updated_at = now();
+
+  insert into jira_uploads (filename, rows, added, updated, uploaded_by) values (p_filename, v_total, v_added, v_total - v_added, p_by);
+  return jsonb_build_object('added', v_added, 'updated', v_total - v_added, 'newStyles', v_styles);
+end $$;
+
+-- Import pemetaan, semua atau tidak sama sekali. p_rows: [{style_sku, component_sku, qty_per, _row}]
+create or replace function spo_import_bom(p_rows jsonb)
+returns jsonb language plpgsql as $$
+declare r jsonb; v_st text; v_co text; v_q numeric; v_err text[] := '{}'; v_added int := 0; v_upd int := 0;
+begin
+  for r in select * from jsonb_array_elements(p_rows) loop
+    v_st := upper(trim(r->>'style_sku')); v_co := upper(trim(r->>'component_sku'));
+    v_q := coalesce(nullif(trim(r->>'qty_per'),'')::numeric, 1);
+    if not exists (select 1 from styles where sku = v_st) then
+      v_err := v_err || format('baris %s: style %s belum ada', r->>'_row', coalesce(nullif(v_st,''),'(kosong)'));
+    elsif not exists (select 1 from items where sku = v_co) then
+      v_err := v_err || format('baris %s: component %s belum ada', r->>'_row', coalesce(nullif(v_co,''),'(kosong)'));
+    elsif v_q <= 0 then
+      v_err := v_err || format('baris %s: Qty per pcs harus lebih dari 0', r->>'_row');
+    else
+      if exists (select 1 from style_components where style_sku = v_st and component_sku = v_co) then v_upd := v_upd + 1;
+      else v_added := v_added + 1; end if;
+      insert into style_components values (v_st, v_co, v_q)
+      on conflict (style_sku, component_sku) do update set qty_per = excluded.qty_per;
+    end if;
+  end loop;
+  if array_length(v_err, 1) > 0 then
+    raise exception 'Import dibatalkan. %', array_to_string(v_err[1:5], '; ') ||
+      case when array_length(v_err, 1) > 5 then format('; dan %s lainnya', array_length(v_err, 1) - 5) else '' end;
+  end if;
+  return jsonb_build_object('added', v_added, 'updated', v_upd);
+end $$;
+
+-- ---------------------------------------------------------------------
 -- KEAMANAN (Supabase): hanya user yang login yang bisa membaca/menulis.
 -- Semua user login punya akses penuh (sesuai keputusan: semua orang bisa semua).
 -- ---------------------------------------------------------------------
@@ -399,6 +542,13 @@ alter table spo_orders         enable row level security;
 alter table spo_lines          enable row level security;
 alter table spo_line_sizes     enable row level security;
 alter table spo_events         enable row level security;
+alter table styles             enable row level security;
+alter table style_components   enable row level security;
+alter table app_settings       enable row level security;
+alter table jira_tickets       enable row level security;
+alter table jira_uploads       enable row level security;
+alter table po_priority        enable row level security;
+alter table stock_adjustments  enable row level security;
 
 create policy auth_all on settings_sizes     for all to authenticated using (true) with check (true);
 create policy auth_all on settings_locations for all to authenticated using (true) with check (true);
@@ -406,6 +556,13 @@ create policy auth_all on items              for all to authenticated using (tru
 create policy auth_all on spo_orders         for all to authenticated using (true) with check (true);
 create policy auth_all on spo_lines          for all to authenticated using (true) with check (true);
 create policy auth_all on spo_line_sizes     for all to authenticated using (true) with check (true);
+create policy auth_all on styles             for all to authenticated using (true) with check (true);
+create policy auth_all on style_components   for all to authenticated using (true) with check (true);
+create policy auth_all on app_settings       for all to authenticated using (true) with check (true);
+create policy auth_all on jira_tickets       for all to authenticated using (true) with check (true);
+create policy auth_all on jira_uploads       for all to authenticated using (true) with check (true);
+create policy auth_all on po_priority        for all to authenticated using (true) with check (true);
+create policy auth_all on stock_adjustments  for all to authenticated using (true) with check (true);
 -- Event tidak boleh diubah/dihapus langsung, hanya lewat fungsi (insert + void).
 create policy auth_read on spo_events for select to authenticated using (true);
 create policy auth_ins  on spo_events for insert to authenticated with check (true);

@@ -3,7 +3,7 @@
 // Aturannya meniru fungsi SQL di supabase/schema.sql supaya perilakunya sama.
 // =====================================================================
 (function () {
-  const KEY = "spo_outsource_demo_v1";
+  const KEY = "spo_outsource_demo_v2";
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
   const clone = (x) => JSON.parse(JSON.stringify(x));
   const nowIso = () => new Date().toISOString();
@@ -14,12 +14,12 @@
     const o1 = uid(), o2 = uid(), o3 = uid(), l1 = uid(), l2 = uid(), l3 = uid(), l4 = uid();
     const s = {
       seq: 3,
-      sizes: ["XXS", "XS", "SS", "MM", "LL", "XL", "XXL"].map((code, i) => ({ code, sort: i + 1, active: true })),
+      sizes: ["XXS", "XS", "S", "SM", "M", "ML", "L", "XL", "XXL", "OS"].map((code, i) => ({ code, sort: i + 1, active: true })),
       locations: [{ name: "Inspection", active: true }, { name: "Cin Cin Studio", active: true }],
       items: [
-        { sku: "CONTOH-KNIT-SODA", description: "Contoh: Outsource Knit Soda", unit: "Each", active: true },
-        { sku: "CONTOH-CROCHET-TOP", description: "Contoh: Outsource Crochet Top", unit: "Each", active: true },
-        { sku: "CONTOH-BEADED-BAG", description: "Contoh: Outsource Beaded Bag", unit: "Each", active: true },
+        { sku: "O00100001", description: "Contoh: Knit Panel Soda", unit: "Each", active: true },
+        { sku: "O00100002", description: "Contoh: Crochet Trim", unit: "Each", active: true },
+        { sku: "O00100003", description: "Contoh: Beading Star", unit: "Each", active: true },
       ],
       orders: [
         { id: o1, spo_number: "SPO-0001", status: "OPEN", spo_date: addDays(-20), due_date: addDays(-2),
@@ -36,18 +36,18 @@
           updated_at: nowIso() },
       ],
       lines: [
-        { id: l1, order_id: o1, line_no: 1, spo_line_id: "SPO-0001001", sku: "CONTOH-KNIT-SODA",
-          description: "Contoh: Outsource Knit Soda", supplier_sku: "KS-01", unit: "Each",
-          unit_price: 185000, discount_pct: 5, sizes: { XS: 10, SS: 20, MM: 20, LL: 10 } },
-        { id: l2, order_id: o1, line_no: 2, spo_line_id: "SPO-0001002", sku: "CONTOH-CROCHET-TOP",
-          description: "Contoh: Outsource Crochet Top", supplier_sku: "", unit: "Each",
-          unit_price: 240000, discount_pct: 0, sizes: { SS: 8, MM: 8 } },
-        { id: l3, order_id: o2, line_no: 1, spo_line_id: "SPO-0002001", sku: "CONTOH-CROCHET-TOP",
-          description: "Contoh: Outsource Crochet Top", supplier_sku: "CT-7", unit: "Each",
-          unit_price: 240000, discount_pct: 0, sizes: { XXS: 4, XS: 8, SS: 12, MM: 12, LL: 8, XL: 4, XXL: 2 } },
-        { id: l4, order_id: o3, line_no: 1, spo_line_id: null, sku: "CONTOH-BEADED-BAG",
-          description: "Contoh: Outsource Beaded Bag", supplier_sku: "", unit: "Each",
-          unit_price: 320000, discount_pct: 0, sizes: { MM: 15 } },
+        { id: l1, order_id: o1, line_no: 1, spo_line_id: "SPO-0001001", sku: "O00100001",
+          description: "Contoh: Knit Panel Soda", supplier_sku: "KS-01", unit: "Each",
+          unit_price: 185000, discount_pct: 5, sizes: { XS: 10, S: 20, M: 20, L: 10 } },
+        { id: l2, order_id: o1, line_no: 2, spo_line_id: "SPO-0001002", sku: "O00100002",
+          description: "Contoh: Crochet Trim", supplier_sku: "", unit: "Each",
+          unit_price: 240000, discount_pct: 0, sizes: { S: 8, M: 8 } },
+        { id: l3, order_id: o2, line_no: 1, spo_line_id: "SPO-0002001", sku: "O00100002",
+          description: "Contoh: Crochet Trim", supplier_sku: "CT-7", unit: "Each",
+          unit_price: 240000, discount_pct: 0, sizes: { XXS: 4, XS: 8, S: 12, M: 12, L: 8, XL: 4, XXL: 2 } },
+        { id: l4, order_id: o3, line_no: 1, spo_line_id: null, sku: "O00100003",
+          description: "Contoh: Beading Star", supplier_sku: "", unit: "Each",
+          unit_price: 320000, discount_pct: 0, sizes: { M: 15 } },
       ],
       events: [],
     };
@@ -56,16 +56,45 @@
         event_date: addDays(d), batch_id: null, note: note || "", recorded_by: by, created_at: nowIso(),
         voided_at: null, voided_by: null, void_reason: null });
     ev(o1, l1, "XS", "RECEIVE", 10, -8, "Contoh Rista", "Kiriman 1");
-    ev(o1, l1, "SS", "RECEIVE", 20, -8, "Contoh Rista", "Kiriman 1");
-    ev(o1, l1, "MM", "RECEIVE", 12, -8, "Contoh Rista", "Kiriman 1");
+    ev(o1, l1, "S", "RECEIVE", 20, -8, "Contoh Rista", "Kiriman 1");
+    ev(o1, l1, "M", "RECEIVE", 12, -8, "Contoh Rista", "Kiriman 1");
     ev(o1, l1, "XS", "QC_PASS", 10, -7, "Contoh Lina");
-    ev(o1, l1, "SS", "QC_PASS", 16, -7, "Contoh Lina");
-    ev(o1, l1, "SS", "QC_REJECT", 3, -7, "Contoh Lina", "Jahitan lepas");
-    ev(o1, l1, "SS", "QC_DAMAGED", 1, -7, "Contoh Lina", "Bolong");
-    ev(o1, l1, "MM", "QC_PASS", 12, -7, "Contoh Lina");
-    ev(o1, l1, "SS", "REPAIR_RETURN", 3, -3, "Contoh Rista");
-    ev(o1, l2, "SS", "RECEIVE", 8, -5, "Contoh Rista");
-    ev(o1, l2, "SS", "QC_PASS", 8, -4, "Contoh Lina");
+    ev(o1, l1, "S", "QC_PASS", 16, -7, "Contoh Lina");
+    ev(o1, l1, "S", "QC_REJECT", 3, -7, "Contoh Lina", "Jahitan lepas");
+    ev(o1, l1, "S", "QC_DAMAGED", 1, -7, "Contoh Lina", "Bolong");
+    ev(o1, l1, "M", "QC_PASS", 12, -7, "Contoh Lina");
+    ev(o1, l1, "S", "REPAIR_RETURN", 3, -3, "Contoh Rista");
+    ev(o1, l2, "S", "RECEIVE", 8, -5, "Contoh Rista");
+    ev(o1, l2, "S", "QC_PASS", 8, -4, "Contoh Lina");
+
+    // fulfillment: style, pemetaan component, tiket Jira contoh
+    s.styles = [
+      { sku: "S9001", name: "Contoh: Soda Knit Dress - Black", range: "Soda", active: true },
+      { sku: "S9002", name: "Contoh: Crochet Top - Ivory", range: "Crochet", active: true },
+      { sku: "S9003", name: "Contoh: Star Mini Dress - Gold", range: "Star", active: true },
+      { sku: "S9004", name: "Contoh: Linen Pants - Sand", range: "Linen", active: true },
+    ];
+    s.bom = [
+      { style_sku: "S9001", component_sku: "O00100001", qty_per: 1 },
+      { style_sku: "S9002", component_sku: "O00100002", qty_per: 1 },
+      { style_sku: "S9002", component_sku: "O00100003", qty_per: 2 },
+      { style_sku: "S9003", component_sku: "O00100003", qty_per: 2 },
+    ];
+    let k = 90000;
+    const tk = (po, d, sku, name, size, qty, status, cust, seenOpen) => s.tickets.push({ key: "CC-" + (k++), ticket_number: "", po_number: po,
+      customer_name: cust, customer_type: "Wholesale", created_date: addDays(d), deadline: addDays(d + 30), sku, item_name: name,
+      range: "", qty, size, status, seen_open: seenOpen !== false, first_seen_at: nowIso(), updated_at: nowIso() });
+    s.tickets = [];
+    tk("PO-DEMO-01", -10, "S9001", "Contoh: Soda Knit Dress - Black", "S", 5, "1.1. Preparation", "Contoh Boutique A");
+    tk("PO-DEMO-01", -10, "S9001", "Contoh: Soda Knit Dress - Black", "M", 4, "1.2. Fabric Incompleted", "Contoh Boutique A");
+    tk("PO-DEMO-01", -10, "S9001", "Contoh: Soda Knit Dress - Black", "M", 2, "3.0. Sewing In Progress", "Contoh Boutique A");
+    tk("PO-DEMO-02", -8, "S9002", "Contoh: Crochet Top - Ivory", "S", 2, "1.1. Preparation", "Contoh Wholesale B");
+    tk("PO-DEMO-02", -8, "S9001", "Contoh: Soda Knit Dress - Black", "S", 8, "2.0. Cutting In Progress", "Contoh Wholesale B");
+    tk("PO-DEMO-02", -8, "S9004", "Contoh: Linen Pants - Sand", "L", 3, "1.1. Preparation", "Contoh Wholesale B");
+    tk("PO-DEMO-03", -5, "S9001", "Contoh: Soda Knit Dress - Black", "S", 5, "1.0. Ticket Created", "Contoh Preorder C");
+    tk("PO-DEMO-03", -5, "S9001", "Contoh: Soda Knit Dress - Black", "XS", 3, "1.0. Ticket Created", "Contoh Preorder C");
+    tk("PO-DEMO-03", -5, "S9003", "Contoh: Star Mini Dress - Gold", "M", 1, "1.0. Ticket Created", "Contoh Preorder C");
+    s.po_priority = []; s.adjustments = []; s.uploads = []; s.app_settings = { consume_from: 3 };
     return s;
   }
 
@@ -230,6 +259,93 @@
       catch (err) { throw new Error("Tidak bisa dibatalkan karena qty ini sudah dipakai kejadian berikutnya (" + err.message + "). Batalkan kejadian yang lebih baru dulu."); }
       this._commit(s);
       return st;
+    }
+
+    // ---------- component, style, pemetaan ----------
+    // rows: [{sku, description, unit}]. Semua atau tidak sama sekali.
+    async importComponents(rows) {
+      const s = clone(this.state); let added = 0, updated = 0; const errs = [];
+      for (const r of rows) {
+        const sku = String(r.sku || "").trim().toUpperCase(), desc = String(r.description || "").trim();
+        if (!sku || !desc) { errs.push(`baris ${r._row || "?"}: SKU dan Nama wajib diisi`); continue; }
+        const i = s.items.findIndex((x) => x.sku === sku);
+        const row = { sku, description: desc, unit: String(r.unit || "").trim() || (i >= 0 ? s.items[i].unit : "Each"), active: true };
+        if (i >= 0) { s.items[i] = row; updated++; } else { s.items.push(row); added++; }
+      }
+      if (errs.length) throw new Error("Import dibatalkan. " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? `; dan ${errs.length - 5} lainnya` : ""));
+      this._commit(s); return { added, updated };
+    }
+    async importStyles(rows) {
+      const s = clone(this.state); let added = 0, updated = 0; const errs = [];
+      for (const r of rows) {
+        const sku = String(r.sku || "").trim().toUpperCase(), name = String(r.name || "").trim();
+        if (!sku || !name) { errs.push(`baris ${r._row || "?"}: SKU style dan Nama wajib diisi`); continue; }
+        const i = s.styles.findIndex((x) => x.sku === sku);
+        const row = { sku, name, range: String(r.range || "").trim() || (i >= 0 ? s.styles[i].range : ""), active: true };
+        if (i >= 0) { s.styles[i] = row; updated++; } else { s.styles.push(row); added++; }
+      }
+      if (errs.length) throw new Error("Import dibatalkan. " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? `; dan ${errs.length - 5} lainnya` : ""));
+      this._commit(s); return { added, updated };
+    }
+    async importBom(rows) {
+      const s = clone(this.state); let added = 0, updated = 0; const errs = [];
+      for (const r of rows) {
+        const st = String(r.style_sku || "").trim().toUpperCase(), co = String(r.component_sku || "").trim().toUpperCase();
+        const q = r.qty_per === undefined || String(r.qty_per).trim() === "" ? 1 : Number(String(r.qty_per).replace(",", "."));
+        const where = `baris ${r._row || "?"}`;
+        if (!s.styles.some((x) => x.sku === st)) { errs.push(`${where}: style ${st || "(kosong)"} belum ada`); continue; }
+        if (!s.items.some((x) => x.sku === co)) { errs.push(`${where}: component ${co || "(kosong)"} belum ada`); continue; }
+        if (!(q > 0)) { errs.push(`${where}: Qty per pcs harus lebih dari 0`); continue; }
+        const i = s.bom.findIndex((b) => b.style_sku === st && b.component_sku === co);
+        if (i >= 0) { s.bom[i].qty_per = SPO.r2(q); updated++; } else { s.bom.push({ style_sku: st, component_sku: co, qty_per: SPO.r2(q) }); added++; }
+      }
+      if (errs.length) throw new Error("Import dibatalkan. " + errs.slice(0, 5).join("; ") + (errs.length > 5 ? `; dan ${errs.length - 5} lainnya` : ""));
+      this._commit(s); return { added, updated };
+    }
+    async saveBom(styleSku, componentSku, qtyPer) { return this.importBom([{ style_sku: styleSku, component_sku: componentSku, qty_per: qtyPer, _row: 1 }]); }
+    async deleteBom(styleSku, componentSku) {
+      const s = clone(this.state);
+      s.bom = s.bom.filter((b) => !(b.style_sku === styleSku && b.component_sku === componentSku));
+      this._commit(s);
+    }
+
+    // ---------- Jira ----------
+    // Tiket di-upsert per Key. seen_open = pernah terlihat masih menunggu component.
+    // Style yang belum ada dibuat otomatis dari SKU + Item Name.
+    async uploadJira(tickets, filename, by) {
+      const s = clone(this.state);
+      const consumeFrom = Number(s.app_settings.consume_from) || 3;
+      const byKey = {}; s.tickets.forEach((t, i) => (byKey[t.key] = i));
+      let added = 0, updated = 0, newStyles = 0;
+      for (const t of tickets) {
+        const open = FUL.isOpen(t.status, consumeFrom);
+        const i = byKey[t.key];
+        if (i == null) { s.tickets.push({ ...t, seen_open: open, first_seen_at: nowIso(), updated_at: nowIso() }); added++; }
+        else { const old = s.tickets[i]; s.tickets[i] = { ...old, ...t, seen_open: old.seen_open || open, updated_at: nowIso() }; updated++; }
+        if (!s.styles.some((x) => x.sku === t.sku)) { s.styles.push({ sku: t.sku, name: t.item_name || t.sku, range: t.range || "", active: true }); newStyles++; }
+      }
+      s.uploads.push({ id: uid(), filename, rows: tickets.length, added, updated, uploaded_by: by, at: nowIso() });
+      this._commit(s); return { added, updated, newStyles };
+    }
+    // list: [{po_number, priority}] menggantikan semua prioritas; [] = kembali ke FIFO murni
+    async setPoPriorities(list) { const s = clone(this.state); s.po_priority = list.map((p) => ({ po_number: p.po_number, priority: p.priority })); this._commit(s); }
+    async saveAppSettings(v) { const s = clone(this.state); s.app_settings = { ...s.app_settings, ...v }; this._commit(s); }
+
+    // ---------- adjustment stok ----------
+    async saveAdjustment(a, by) {
+      const sku = String(a.sku || "").trim().toUpperCase(), size = String(a.size_code || "").trim().toUpperCase(), qty = SPO.r2(a.qty);
+      if (!this.state.items.some((x) => x.sku === sku)) throw new Error("Pilih component dulu.");
+      if (!size) throw new Error("Pilih ukuran dulu.");
+      if (!qty) throw new Error("Isi jumlah. Pakai angka minus untuk mengurangi stok, misalnya -2.");
+      if (!String(a.reason || "").trim()) throw new Error("Alasan adjustment wajib diisi.");
+      const s = clone(this.state);
+      s.adjustments.push({ id: uid(), sku, size_code: size, qty, reason: a.reason.trim(), created_by: by, created_at: nowIso(), voided_at: null, voided_by: null });
+      this._commit(s);
+    }
+    async voidAdjustment(id, by) {
+      const s = clone(this.state); const a = s.adjustments.find((x) => x.id === id && !x.voided_at);
+      if (!a) throw new Error("Adjustment tidak ditemukan atau sudah dibatalkan");
+      Object.assign(a, { voided_at: nowIso(), voided_by: by }); this._commit(s);
     }
 
     // Sama dengan spo_edit_event: event lama ditandai "Diubah", event baru menggantikannya.

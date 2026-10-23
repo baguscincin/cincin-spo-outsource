@@ -43,7 +43,7 @@ with sync_playwright() as p:
 
     pg.fill("#d-supplier", "Vendor Uji")
     pg.fill("#l0-price", "100000"); pg.fill("#l0-disc", "10")
-    pg.fill("#l0-s-SS", "10"); pg.fill("#l0-s-MM", "5")
+    pg.fill("#l0-s-S", "10"); pg.fill("#l0-s-M", "5")
     assert pg.inner_text("#l0-amt").strip().endswith("1.350.000"), pg.inner_text("#l0-amt")
     pg.screenshot(path=OUT + "s2_editor.png", full_page=True)
     pg.click("[data-action=submit-draft]")
@@ -57,7 +57,7 @@ with sync_playwright() as p:
     pg.click("[data-action=act-type][data-v=RECEIVE]")
     inputs = pg.locator("input[data-act]")
     ids = [inputs.nth(i).get_attribute("data-act") for i in range(inputs.count())]
-    ss = [i for i in ids if "|SS|" in i][0]; mm = [i for i in ids if "|MM|" in i][0]
+    ss = [i for i in ids if "|S|" in i][0]; mm = [i for i in ids if "|M|" in i][0]
     line = ss.split("|")[0]
     pg.fill(f"[data-act='{ss}']", "11")
     print("live over:", pg.inner_text("#act-live"))
@@ -71,19 +71,19 @@ with sync_playwright() as p:
 
     # QC: SS 7 pass 2 reject 1 damaged, MM 5 pass
     pg.click("[data-action=act-type][data-v=QC]")
-    pg.fill(f"[data-act='{line}|SS|QC_PASS']", "7"); pg.fill(f"[data-act='{line}|SS|QC_REJECT']", "2"); pg.fill(f"[data-act='{line}|SS|QC_DAMAGED']", "2")
+    pg.fill(f"[data-act='{line}|S|QC_PASS']", "7"); pg.fill(f"[data-act='{line}|S|QC_REJECT']", "2"); pg.fill(f"[data-act='{line}|S|QC_DAMAGED']", "2")
     assert pg.is_disabled("#act-save"), "7+2+2 > 10 harus ditolak"
     pg.screenshot(path=OUT + "s3_qc_over.png", full_page=False, clip=None)
     pg.locator("#act-live").scroll_into_view_if_needed(); pg.screenshot(path=OUT + "s3b_qc_over_view.png")
-    pg.fill(f"[data-act='{line}|SS|QC_DAMAGED']", "1")
-    pg.fill(f"[data-act='{line}|MM|QC_PASS']", "5"); pg.fill("#a-note", "jahitan lepas")
+    pg.fill(f"[data-act='{line}|S|QC_DAMAGED']", "1")
+    pg.fill(f"[data-act='{line}|M|QC_PASS']", "5"); pg.fill("#a-note", "jahitan lepas")
     pg.click("[data-action=post-act]"); pg.wait_for_selector(".toast-good >> text=Hasil QC tersimpan")
     pg.click("[data-action=act-type][data-v=REPAIR_RETURN]")
     pg.click("[data-action=act-fill]"); pg.click("[data-action=post-act]"); pg.wait_for_selector(".toast-good >> text=Kembali dari repair tersimpan")
     pg.click("[data-action=act-type][data-v=QC]")
     pg.click("[data-action=act-fill]"); pg.click("[data-action=post-act]"); pg.wait_for_selector(".toast-good >> text=Hasil QC tersimpan")
     pg.click("[data-action=act-type][data-v=DAMAGE_DISCOUNT]")
-    pg.fill(f"[data-act='{line}|SS|DAMAGE_DISCOUNT']", "1"); pg.click("[data-action=post-act]"); pg.wait_for_selector(".toast-good >> text=Diskon damaged tersimpan")
+    pg.fill(f"[data-act='{line}|S|DAMAGE_DISCOUNT']", "1"); pg.click("[data-action=post-act]"); pg.wait_for_selector(".toast-good >> text=Diskon damaged tersimpan")
     pg.wait_for_selector("text=Order selesai")
     print("status:", pg.inner_text("h1"))
     pg.screenshot(path=OUT + "s4_detail.png", full_page=True)
@@ -100,13 +100,13 @@ with sync_playwright() as p:
     # Ubah: receiving SS 10 -> 8 ditolak (sudah di-QC), QC Pass MM 5 -> 4 berhasil
     def edit_row(kind, size):
         return pg.locator(f"tr:not(.voided):has-text('{kind}')").filter(has=pg.locator(f"td.mono >> text='{size}'")).locator("[data-action=edit-start]").first
-    edit_row("Barang datang", "SS").click()
+    edit_row("Barang datang", "S").click()
     pg.fill("#ed-qty", "8"); pg.click("[data-action=edit-save]")
     pg.wait_for_selector("[data-msg=edit] [data-inline-msg]")
     assert in_view(pg, "[data-inline-msg]")
     print("edit blocked:", pg.inner_text("[data-inline-msg]"))
     pg.click("[data-action=edit-cancel]")
-    edit_row("QC Pass", "MM").click()
+    edit_row("QC Pass", "M").click()
     pg.fill("#ed-qty", "4"); pg.fill("#ed-reason", "salah hitung"); pg.click("[data-action=edit-save]")
     pg.wait_for_selector(".toast-good >> text=Perubahan disimpan.")
     assert pg.locator("tr:not(.voided) .pill-info:text('Koreksi')").count() == 1

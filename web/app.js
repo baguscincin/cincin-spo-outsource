@@ -54,7 +54,7 @@
       if (o.status === "DRAFT") t.ordered = lines.reduce((s, l) => s + S.lineQty(l), 0);
       orders[o.id] = { o, lines, events, bal, t };
     }
-    return { sizes, sizeSort, orders, items: d.items.slice().sort((a, b) => a.sku.localeCompare(b.sku)) };
+    return { sizes, sizeSort, orders, items: d.items.slice().sort((a, b) => a.sku.localeCompare(b.sku)), ful: FUL.compute(d, orders) };
   }
 
   async function reload() {
@@ -117,7 +117,7 @@
   // LAYOUT
   // ------------------------------------------------------------------
   function shell(inner) {
-    const nav = [["orders", "Orders"], ["recap", "Rekap receiving"], ["items", "Items"], ["settings", "Settings"]];
+    const nav = [["orders", "SPO"], ["fulfil", "Fulfillment PO"], ["recap", "Rekap receiving"], ["items", "Component"], ["styles", "Style"], ["settings", "Settings"]];
     const active = st.view === "edit" || st.view === "detail" ? "orders" : st.view;
     return `
       <header class="topbar">
@@ -689,14 +689,83 @@
   }
 
   // ------------------------------------------------------------------
-  // ITEMS
+  // IMPORT FILE (component, style, pemetaan, Jira): pilih file -> pratinjau -> simpan
+  // ------------------------------------------------------------------
+  const IMPORTS = {
+    component: { what: "component", cols: [["sku", "SKU component"], ["description", "Nama"], ["unit", "Unit"]], save: "importComponents" },
+    style: { what: "style", cols: [["sku", "SKU style"], ["name", "Nama style"], ["range", "Range"]], save: "importStyles" },
+    bom: { what: "pemetaan", cols: [["style_sku", "SKU style"], ["component_sku", "SKU component"], ["qty_per", "Qty per pcs"]], save: "importBom" },
+  };
+
+  function importCard(kind, title, help) {
+    const p = st.imp && st.imp.kind === kind ? st.imp : null;
+    return `<section class="card" data-msg="imp-${kind}">
+      <div class="card-head"><h2 class="card-t">${title}</h2>${kind !== "jira" ? `<button class="link small" data-action="template" data-kind="${kind}">Download template</button>` : ""}</div>
+      <p class="hint">${help}</p>
+      ${p ? importPreview(p) : `<label class="file-pick"><input type="file" accept=".csv,.xlsx,.xls,text/csv" data-import="${kind}"><span class="btn">Pilih file CSV / Excel</span></label>`}
+      ${inlineMsg("imp-" + kind)}
+    </section>`;
+  }
+
+  function importPreview(p) {
+    const buttons = (n) => `<div class="actions"><button class="btn btn-primary" data-action="imp-save">Simpan ${S.qty(n)} baris</button><button class="btn btn-ghost" data-action="imp-cancel">Batal</button></div>`;
+    if (p.kind === "jira") {
+      const bomSkus = new Set(st.data.bom.map((b) => b.style_sku));
+      const consumeFrom = Number(st.data.app_settings.consume_from) || 3;
+      const outs = p.tickets.filter((t) => bomSkus.has(t.sku) && FUL.isOpen(t.status, consumeFrom));
+      const known = new Set(st.data.styles.map((s) => s.sku));
+      const newStyles = new Set(p.tickets.filter((t) => !known.has(t.sku)).map((t) => t.sku)).size;
+      return `<div class="confirm-box">
+        <h3>${esc(p.filename)}</h3>
+        <ul class="facts">
+          <li><b>${S.qty(p.tickets.length)}</b> tiket terbaca dari <b>${S.qty(new Set(p.tickets.map((t) => t.po_number)).size)}</b> PO</li>
+          <li><b>${S.qty(outs.length)}</b> tiket memakai component outsource dan masih menunggu</li>
+          ${newStyles ? `<li><b>${S.qty(newStyles)}</b> style baru akan dibuat otomatis. Petakan component-nya di menu Style.</li>` : ""}
+          ${p.skipped.length ? `<li class="bad-text"><b>${p.skipped.length}</b> baris dilewati karena datanya tidak lengkap:</li>` : ""}
+        </ul>
+        ${p.skipped.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Baris</th><th>Key</th><th>SKU</th><th>Item</th><th>Masalah</th></tr></thead><tbody>
+          ${p.skipped.slice(0, 10).map((s) => `<tr><td>${s.row}</td><td class="mono">${esc(s.key)}</td><td class="mono">${esc(s.sku)}</td><td>${esc(s.item_name)}</td><td class="bad-text">${esc(s.why)}</td></tr>`).join("")}
+          </tbody></table></div>${p.skipped.length > 10 ? `<p class="hint">dan ${p.skipped.length - 10} lainnya</p>` : ""}` : ""}
+        ${buttons(p.tickets.length)}</div>`;
+    }
+    const def = IMPORTS[p.kind];
+    return `<div class="confirm-box"><h3>${esc(p.filename)}</h3><p>${S.qty(p.rows.length)} baris terbaca. Contoh 5 baris pertama:</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr>${def.cols.map(([, l]) => `<th>${l}</th>`).join("")}</tr></thead>
+        <tbody>${p.rows.slice(0, 5).map((r) => `<tr>${def.cols.map(([k]) => `<td>${esc(r[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      ${buttons(p.rows.length)}</div>`;
+  }
+
+  async function handleImport(kind, input) {
+    const file = input.files && input.files[0]; if (!file) return;
+    const blk = input.closest("[data-msg]"); st.msgAt = blk ? blk.dataset.msg : null; st.error = null;
+    try {
+      const table = await FUL.readFile(file);
+      if (kind === "jira") { const r = FUL.parseJira(table); st.imp = { kind, filename: file.name, ...r }; if (!r.tickets.length) throw new Error("Tidak ada tiket yang bisa dibaca dari file ini."); }
+      else { const rows = FUL.tableRows(table, FUL.SPEC[kind], IMPORTS[kind].what); if (!rows.length) throw new Error("File tidak berisi data."); st.imp = { kind, filename: file.name, rows }; }
+    } catch (e) { st.imp = null; setError(e.message || String(e)); }
+    render();
+  }
+
+  function downloadText(name, text) {
+    const url = URL.createObjectURL(new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+  const csvLine = (vals) => vals.map((v) => { const s = String(v == null ? "" : v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(",");
+
+  // ------------------------------------------------------------------
+  // COMPONENT (tabel items)
   // ------------------------------------------------------------------
   function itemsView() {
     const e = st.itemEdit || { sku: "", description: "", unit: "Each", active: true };
+    const usedIn = {}; st.data.bom.forEach((b) => (usedIn[b.component_sku] = (usedIn[b.component_sku] || 0) + 1));
+    const q = (st.compQ || "").trim().toLowerCase();
+    const list = st.idx.items.filter((i) => !q || (i.sku + " " + i.description).toLowerCase().includes(q));
     return `
-      <section class="head-row"><div><h1>Items</h1><p class="sub">Daftar SKU general untuk outsource. Satu SKU dipakai untuk semua ukuran.</p></div></section>
+      <section class="head-row"><div><h1>Component</h1><p class="sub">Barang outsource yang dipesan ke vendor lewat SPO, misalnya beading atau knit panel. Satu SKU untuk semua ukuran.</p></div></section>
+      ${importCard("component", "Import component dari file", "Kolom: <b>SKU component</b>, <b>Nama</b>, Unit (boleh kosong). SKU yang sudah ada akan diperbarui namanya.")}
       <section class="card" data-msg="item">
-        <h2 class="card-t">${e.original_sku ? "Edit " + esc(e.original_sku) : "Tambah item"}</h2>
+        <h2 class="card-t">${e.original_sku ? "Edit " + esc(e.original_sku) : "Tambah satu component"}</h2>
         <div class="grid-form">
           <label class="field" for="i-sku"><span class="field-l">SKU <b class=req>*</b></span><input id="i-sku" class="input mono" value="${esc(e.sku)}" data-bind="itemEdit.sku"${e.original_sku ? " readonly" : ""}></label>
           <label class="field" for="i-desc"><span class="field-l">Deskripsi <b class=req>*</b></span><input id="i-desc" class="input" value="${esc(e.description)}" data-bind="itemEdit.description"></label>
@@ -704,21 +773,229 @@
           <label class="field check" for="i-active"><input id="i-active" type="checkbox" data-bind="itemEdit.active"${e.active !== false ? " checked" : ""}> Aktif (muncul di pilihan order)</label>
         </div>
         ${inlineMsg("item")}
-        <div class="actions"><button class="btn btn-primary" data-action="save-item">${e.original_sku ? "Simpan perubahan" : "Tambah item"}</button>
+        <div class="actions"><button class="btn btn-primary" data-action="save-item">${e.original_sku ? "Simpan perubahan" : "Tambah component"}</button>
           ${e.original_sku ? `<button class="btn btn-ghost" data-action="item-cancel">Batal</button>` : ""}</div>
       </section>
-      <div class="table-wrap"><table class="tbl"><thead><tr><th>SKU</th><th>Deskripsi</th><th>Unit</th><th>Status</th><th></th></tr></thead>
-        <tbody>${st.idx.items.length ? st.idx.items.map((i) => `<tr><td class="mono strong">${esc(i.sku)}</td><td>${esc(i.description)}</td><td>${esc(i.unit)}</td>
+      <section class="toolbar"><input id="c-q" class="input" type="search" placeholder="Cari SKU atau nama component…" value="${esc(st.compQ || "")}" data-bind="compQ"><span class="hint">${S.qty(list.length)} component</span></section>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>SKU</th><th>Nama</th><th>Unit</th><th class="num">Dipakai di</th><th>Status</th><th></th></tr></thead>
+        <tbody>${list.length ? list.slice(0, 300).map((i) => `<tr><td class="mono strong">${esc(i.sku)}</td><td>${esc(i.description)}</td><td>${esc(i.unit)}</td>
+          <td class="num">${usedIn[i.sku] ? S.qty(usedIn[i.sku]) + " style" : `<span class="muted">belum</span>`}</td>
           <td>${i.active ? pill("Aktif", "good") : pill("Nonaktif", "muted")}</td><td><button class="link" data-action="item-edit" data-sku="${esc(i.sku)}">Edit</button></td></tr>`).join("")
-          : `<tr><td colspan="5" class="empty">Belum ada item. Tambahkan SKU general pertama di atas.</td></tr>`}</tbody></table></div>`;
+          : `<tr><td colspan="6" class="empty">Belum ada component. Import dari file atau tambahkan satu per satu di atas.</td></tr>`}</tbody></table></div>
+      ${list.length > 300 ? `<p class="hint">Tampil 300 dari ${S.qty(list.length)}. Pakai pencarian untuk menemukan yang lain.</p>` : ""}`;
+  }
+
+  // ------------------------------------------------------------------
+  // STYLE dan pemetaan component
+  // ------------------------------------------------------------------
+  function stylesView() {
+    const F = st.idx.ful, f = st.styleF || (st.styleF = { q: "", show: "ALL" });
+    const bomBy = {}; st.data.bom.forEach((b) => (bomBy[b.style_sku] = bomBy[b.style_sku] || []).push(b));
+    const itemBy = {}; st.data.items.forEach((i) => (itemBy[i.sku] = i));
+    const openPcs = {}; (st.data.tickets || []).forEach((t) => { if (FUL.isOpen(t.status, F.consumeFrom)) openPcs[t.sku] = (openPcs[t.sku] || 0) + t.qty; });
+    const q = f.q.trim().toLowerCase();
+    const all = st.data.styles.slice().sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true }));
+    const list = all.filter((s) => {
+      if (f.show === "MAPPED" && !bomBy[s.sku]) return false;
+      if (f.show === "UNMAPPED" && bomBy[s.sku]) return false;
+      if (f.show === "OPEN" && !openPcs[s.sku]) return false;
+      return !q || (s.sku + " " + s.name + " " + (s.range || "")).toLowerCase().includes(q);
+    });
+    const seg = [["ALL", "Semua"], ["OPEN", "Ada di tiket menunggu"], ["MAPPED", "Sudah dipetakan"], ["UNMAPPED", "Belum dipetakan"]];
+    const chip = (b) => `<span class="chip"><span class="mono">${esc(b.component_sku)}</span> ${esc((itemBy[b.component_sku] || {}).description || "")} <b>×${S.qty(b.qty_per)}</b></span>`;
+    return `
+      <section class="head-row"><div><h1>Style</h1><p class="sub">SKU produk jadi dari Jira. Petakan component outsource yang dipakai tiap style beserta jumlahnya per 1 pcs. Ukurannya otomatis sama: style M memakai component M.</p></div></section>
+      <div class="two-col">
+        ${importCard("style", "Import style", "Kolom: <b>SKU style</b>, <b>Nama style</b>, Range (boleh kosong). Style juga dibuat otomatis saat upload Jira.")}
+        ${importCard("bom", "Import pemetaan", "Kolom: <b>SKU style</b>, <b>SKU component</b>, Qty per pcs (kosong = 1). Bisa juga diatur satu per satu di tabel bawah.")}
+      </div>
+      <section class="toolbar">
+        <input id="s-q" class="input" type="search" placeholder="Cari SKU, nama, atau range…" value="${esc(f.q)}" data-bind="styleF.q">
+        <div class="seg">${seg.map(([k, l]) => `<button class="seg-btn${f.show === k ? " is-active" : ""}" data-action="style-show" data-v="${k}">${l}</button>`).join("")}</div>
+        <span class="hint">${S.qty(list.length)} style</span>
+      </section>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>SKU style</th><th>Nama</th><th>Component outsource</th><th class="num">Pcs di tiket menunggu</th><th></th></tr></thead>
+        <tbody>${list.length ? list.slice(0, 200).map((s) => {
+          const comps = bomBy[s.sku] || [];
+          const row = `<tr class="${st.bomEdit === s.sku ? "is-editing" : ""}"><td class="mono strong nowrap">${esc(s.sku)}</td><td>${esc(s.name)}</td>
+            <td>${comps.length ? `<div class="chips">${comps.map(chip).join("")}</div>` : `<span class="muted">Bukan outsource / belum dipetakan</span>`}</td>
+            <td class="num">${openPcs[s.sku] ? S.qty(openPcs[s.sku]) : ""}</td>
+            <td><button class="link" data-action="bom-edit" data-sku="${esc(s.sku)}">${st.bomEdit === s.sku ? "Tutup" : "Atur component"}</button></td></tr>`;
+          return row + (st.bomEdit === s.sku ? bomEditor(s, comps, itemBy) : "");
+        }).join("") : `<tr><td colspan="5" class="empty">Tidak ada style di filter ini. Import style atau upload file Jira dulu.</td></tr>`}</tbody></table></div>
+      ${list.length > 200 ? `<p class="hint">Tampil 200 dari ${S.qty(list.length)}. Pakai pencarian untuk menemukan yang lain.</p>` : ""}
+      <datalist id="dl-comp">${st.idx.items.filter((i) => i.active).map((i) => `<option value="${esc(i.sku)}">${esc(i.description)}</option>`).join("")}</datalist>`;
+  }
+
+  function bomEditor(s, comps, itemBy) {
+    const n = st.bomNew || {};
+    return `<tr class="edit-row"><td colspan="5" data-msg="bom"><div class="edit-form">
+      <strong>Component untuk ${esc(s.sku)} ${esc(s.name)}</strong>
+      ${comps.length ? `<table class="tbl tbl-bom"><thead><tr><th>Component</th><th class="num">Qty per 1 pcs style</th><th></th></tr></thead><tbody>
+        ${comps.map((b) => `<tr><td><span class="mono strong">${esc(b.component_sku)}</span> ${esc((itemBy[b.component_sku] || {}).description || "")}</td>
+          <td class="num"><input id="bq-${esc(b.component_sku)}" class="input num w-q" inputmode="decimal" value="${esc(b.qty_per)}" data-bom-qty="${esc(b.component_sku)}" aria-label="Qty ${esc(b.component_sku)}"></td>
+          <td><button class="link small danger-text" data-action="bom-del" data-comp="${esc(b.component_sku)}">Hapus</button></td></tr>`).join("")}
+        </tbody></table>` : `<p class="hint">Belum ada component. Kalau style ini tidak memakai barang outsource, biarkan kosong.</p>`}
+      <div class="edit-fields">
+        <label class="field grow" for="bn-comp"><span class="field-l">Tambah component</span><input id="bn-comp" class="input mono" list="dl-comp" value="${esc(n.comp || "")}" data-bind="bomNew.comp" placeholder="Ketik SKU atau nama, lalu pilih" autocomplete="off"></label>
+        <label class="field" for="bn-qty"><span class="field-l">Qty per pcs</span><input id="bn-qty" class="input num w-q" inputmode="decimal" value="${esc(n.qty || "1")}" data-bind="bomNew.qty"></label>
+        <button class="btn btn-primary" data-action="bom-add">Tambah</button>
+      </div>
+      ${inlineMsg("bom")}
+      <p class="hint">Ubah angka qty lalu klik di luar kotak untuk menyimpan. Contoh: style butuh 2 beading star per pcs, isi 2.</p>
+    </div></td></tr>`;
+  }
+
+  // ------------------------------------------------------------------
+  // FULFILLMENT PO
+  // ------------------------------------------------------------------
+  const PO_STATE = { FULL: ["Siap semua", "good"], PARTIAL: ["Sebagian", "warn"], BACKORDER: ["Back order", "bad"] };
+
+  function fulfilView() {
+    const F = st.idx.ful, t = st.fulT || (st.fulT = { tab: "po", po: "", res: "", q: "" });
+    const last = (st.data.uploads || []).slice().sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+    const okT = F.open.filter((x) => F.result[x.key].ok), boT = F.open.filter((x) => !F.result[x.key].ok);
+    const pcs = (l) => l.reduce((s, x) => s + x.qty, 0);
+    const toOrder = Object.values(F.stock).filter((s) => s.to_order > 0).length;
+    const kpis = [["Tiket outsource menunggu", `${S.qty(F.open.length)} <small>${S.qty(pcs(F.open))} pcs</small>`, ""],
+      ["Bisa dipenuhi", `${S.qty(okT.length)} <small>${S.qty(pcs(okT))} pcs</small>`, okT.length ? "good" : ""],
+      ["Back order", `${S.qty(boT.length)} <small>${S.qty(pcs(boT))} pcs</small>`, boT.length ? "bad" : ""],
+      ["Component perlu SPO baru", S.qty(toOrder), toOrder ? "warn" : ""]];
+    const tabs = [["po", "Per PO"], ["tickets", "Per tiket"], ["short", "Kekurangan component"], ["stock", "Stok & adjustment"]];
+    const body = { po: fulPoTab, tickets: fulTicketTab, short: fulShortTab, stock: fulStockTab }[t.tab](F);
+    return `
+      <section class="head-row"><div><h1>Fulfillment PO</h1><p class="sub">Upload export Jira, lalu website mengecek tiket yang memakai component outsource: bisa dipenuhi dari stok yang sudah lulus QC, atau masih back order. Urutannya FIFO, prioritas per PO bisa diubah.</p></div></section>
+      ${importCard("jira", "Upload export Jira", `Kolom wajib: <b>Key, PO Number, SKU, Size, Status</b>. Upload file terbaru kapan saja; tiket yang sama akan diperbarui, tidak dobel.${last ? ` Upload terakhir: <b>${esc(last.filename || "")}</b>, ${S.fmtDate(last.at)} oleh ${esc(last.uploaded_by || "")}.` : ""}`)}
+      ${st.data.bom.length ? "" : `<div class="msg msg-bad">Belum ada style yang dipetakan ke component, jadi belum ada tiket yang dihitung. Atur di menu <button class="link" data-action="nav" data-view="styles">Style</button>.</div>`}
+      <section class="kpis">${kpis.map(([l, v, tone]) => `<div class="kpi${tone ? " kpi-" + tone : ""}"><div class="kpi-v">${v}</div><div class="kpi-l">${l}</div></div>`).join("")}</section>
+      <div class="seg">${tabs.map(([k, l]) => `<button class="seg-btn${t.tab === k ? " is-active" : ""}" data-action="ful-tab" data-v="${k}">${l}</button>`).join("")}</div>
+      ${body}`;
+  }
+
+  function fulPoTab(F) {
+    const anyPrio = (st.data.po_priority || []).length > 0;
+    return `<section class="card" data-msg="prio">
+      <div class="card-head"><h2 class="card-t">Antrian PO</h2>
+        ${anyPrio ? `<button class="btn btn-sm" data-action="prio-reset">Kembalikan ke FIFO</button>` : ""}</div>
+      <p class="hint">Urutan 1 mendapat stok duluan. ${anyPrio ? "Urutan sudah diatur manual." : "Saat ini murni FIFO berdasarkan tanggal tiket dibuat."} Pakai ↑ ↓ atau "Utamakan" untuk mengubah prioritas.</p>
+      ${inlineMsg("prio")}
+      <div class="table-wrap"><table class="tbl"><thead><tr><th class="num">Urutan</th><th>PO</th><th>Customer</th><th>Tgl tiket</th><th>Deadline</th><th class="num">Tiket</th><th class="num">Pcs</th><th class="num">Terpenuhi</th><th>Status</th><th>Prioritas</th></tr></thead>
+        <tbody>${F.poList.length ? F.poList.map((p, i) => {
+          const [lbl, tone] = PO_STATE[p.state];
+          const cust = [...p.customers]; const overdue = p.deadline && p.deadline < S.today();
+          return `<tr><td class="num strong">${p.order}</td>
+            <td><button class="link mono" data-action="ful-po" data-po="${esc(p.po_number)}">${esc(p.po_number)}</button></td>
+            <td>${esc(cust.slice(0, 2).join(", "))}${cust.length > 2 ? ` +${cust.length - 2}` : ""}<div class="small muted">${esc([...p.types].join(", "))}</div></td>
+            <td class="nowrap">${S.fmtDate(p.first_date)}</td><td class="nowrap${overdue ? " overdue" : ""}">${S.fmtDate(p.deadline)}</td>
+            <td class="num">${S.qty(p.tickets)}</td><td class="num">${S.qty(p.pcs)}</td><td class="num">${S.qty(p.ok_pcs)} / ${S.qty(p.pcs)}</td>
+            <td>${pill(lbl, tone)}</td>
+            <td class="nowrap"><button class="icon-btn" data-action="prio-move" data-po="${esc(p.po_number)}" data-d="-1" aria-label="Naikkan ${esc(p.po_number)}" title="Naikkan"${i === 0 ? " disabled" : ""}>↑</button><button class="icon-btn" data-action="prio-move" data-po="${esc(p.po_number)}" data-d="1" aria-label="Turunkan ${esc(p.po_number)}" title="Turunkan"${i === F.poList.length - 1 ? " disabled" : ""}>↓</button>${i > 0 ? `<button class="link small" data-action="prio-top" data-po="${esc(p.po_number)}">Utamakan</button>` : ""}</td></tr>`;
+        }).join("") : `<tr><td colspan="10" class="empty">Belum ada tiket outsource yang menunggu. Upload file Jira dan pastikan style sudah dipetakan ke component.</td></tr>`}</tbody></table></div></section>`;
+  }
+
+  function ticketNeeds(r) {
+    return r.needs.map((n) => {
+      const s = r.short.find((x) => x.sku === n.sku);
+      return `<span class="chip${s ? " chip-bad" : ""}"><span class="mono">${esc(n.sku)}</span> ${esc(n.size)} ×${S.qty(n.need)}${s ? ` · ada ${S.qty(s.have)}` : ""}</span>`;
+    }).join("");
+  }
+
+  function fulTicketRows(F) {
+    const t = st.fulT, q = t.q.trim().toLowerCase();
+    return F.open.map((x, i) => ({ x, i, r: F.result[x.key] })).filter(({ x, r }) =>
+      (!t.po || x.po_number === t.po) && (!t.res || (t.res === "OK") === r.ok) &&
+      (!q || [x.key, x.po_number, x.sku, x.item_name, x.customer_name].join(" ").toLowerCase().includes(q)));
+  }
+
+  function fulTicketTab(F) {
+    const t = st.fulT, rows = fulTicketRows(F);
+    const pos = F.poList.map((p) => p.po_number);
+    return `<section class="toolbar">
+        <select id="ft-po" class="input" data-bind="fulT.po"><option value="">Semua PO</option>${pos.map((p) => `<option${p === t.po ? " selected" : ""}>${esc(p)}</option>`).join("")}</select>
+        <div class="seg">${[["", "Semua"], ["OK", "Bisa dipenuhi"], ["BO", "Back order"]].map(([k, l]) => `<button class="seg-btn${t.res === k ? " is-active" : ""}" data-action="ful-res" data-v="${k}">${l}</button>`).join("")}</div>
+        <input id="ft-q" class="input" type="search" placeholder="Cari Key, SKU, nama, customer…" value="${esc(t.q)}" data-bind="fulT.q">
+        <span class="spacer"></span><button class="btn" data-action="ful-csv">Download CSV</button>
+      </section>
+      <p class="hint">${S.qty(rows.length)} tiket. Kotak merah = component yang kurang, dengan stok yang tersisa saat giliran tiket itu.</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th class="num">Urutan</th><th>Key</th><th>PO</th><th>Tgl</th><th>Style</th><th>Size</th><th class="num">Qty</th><th>Status Jira</th><th>Hasil</th><th>Component dibutuhkan</th></tr></thead>
+        <tbody>${rows.length ? rows.slice(0, 500).map(({ x, i, r }) => `<tr><td class="num">${i + 1}</td><td class="mono nowrap">${esc(x.key)}</td><td class="mono nowrap">${esc(x.po_number)}</td>
+          <td class="nowrap">${S.fmtDate(x.created_date)}</td><td><span class="mono">${esc(x.sku)}</span> <span class="small muted">${esc(x.item_name || "")}</span></td>
+          <td class="mono">${esc(x.size)}</td><td class="num">${S.qty(x.qty)}</td><td class="small">${esc(x.status)}</td>
+          <td>${r.ok ? pill("Bisa dipenuhi", "good") : pill("Back order", "bad")}</td><td><div class="chips">${ticketNeeds(r)}</div></td></tr>`).join("")
+          : `<tr><td colspan="10" class="empty">Tidak ada tiket di filter ini.</td></tr>`}</tbody></table></div>
+      ${rows.length > 500 ? `<p class="hint">Tampil 500 dari ${S.qty(rows.length)}. Download CSV untuk melihat semua.</p>` : ""}`;
+  }
+
+  function fulShortTab(F) {
+    const itemBy = {}; st.data.items.forEach((i) => (itemBy[i.sku] = i));
+    const rows = Object.values(F.stock).filter((s) => s.demand > 0).sort((a, b) => b.to_order - a.to_order || b.short - a.short || a.sku.localeCompare(b.sku) || (st.idx.sizeSort[a.size] ?? 99) - (st.idx.sizeSort[b.size] ?? 99));
+    return `<p class="hint">Kebutuhan component dari semua tiket yang menunggu, dibandingkan stok yang sudah lulus QC. "Perlu SPO baru" = kekurangan yang belum tertutup SPO yang sedang berjalan.</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Component</th><th>Size</th><th class="num">Dibutuhkan</th><th class="num">Stok</th><th class="num">Kurang</th><th class="num">Sedang dipesan (SPO)</th><th class="num">Perlu SPO baru</th></tr></thead>
+        <tbody>${rows.length ? rows.map((s) => `<tr><td><span class="mono strong">${esc(s.sku)}</span> ${esc((itemBy[s.sku] || {}).description || "")}</td><td class="mono">${esc(s.size)}</td>
+          <td class="num">${S.qty(s.demand)}</td><td class="num">${S.qty(s.on_hand)}</td><td class="num${s.short ? " tone-bad" : ""}">${s.short ? S.qty(s.short) : `<span class="zero">0</span>`}</td>
+          <td class="num">${s.incoming ? S.qty(s.incoming) : `<span class="zero">0</span>`}</td><td class="num strong${s.to_order ? " tone-warn" : ""}">${s.to_order ? S.qty(s.to_order) : `<span class="zero">0</span>`}</td></tr>`).join("")
+          : `<tr><td colspan="7" class="empty">Belum ada kebutuhan component.</td></tr>`}</tbody></table></div>`;
+  }
+
+  function fulStockTab(F) {
+    const itemBy = {}; st.data.items.forEach((i) => (itemBy[i.sku] = i));
+    const rows = Object.values(F.stock).filter((s) => s.qc_pass || s.adjust || s.consumed || s.allocated)
+      .sort((a, b) => a.sku.localeCompare(b.sku) || (st.idx.sizeSort[a.size] ?? 99) - (st.idx.sizeSort[b.size] ?? 99));
+    const a = st.adj || (st.adj = { sku: "", size_code: "", qty: "", reason: "" });
+    const adjs = (st.data.adjustments || []).slice().sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
+    return `<p class="hint">Stok = lulus QC + adjustment − terpakai (tiket Jira yang sudah sampai status ${esc(String(F.consumeFrom))} ke atas). Sisa bebas = stok yang belum dialokasikan ke tiket mana pun.</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Component</th><th>Size</th><th class="num">Lulus QC</th><th class="num">Adjustment</th><th class="num">Terpakai</th><th class="num">Stok</th><th class="num">Dialokasikan</th><th class="num">Sisa bebas</th></tr></thead>
+        <tbody>${rows.length ? rows.map((s) => `<tr><td><span class="mono strong">${esc(s.sku)}</span> ${esc((itemBy[s.sku] || {}).description || "")}</td><td class="mono">${esc(s.size)}</td>
+          <td class="num">${S.qty(s.qc_pass)}</td><td class="num">${s.adjust ? S.qty(s.adjust) : ""}</td><td class="num">${s.consumed ? S.qty(s.consumed) : ""}</td>
+          <td class="num strong${s.on_hand < 0 ? " tone-bad" : ""}">${S.qty(s.on_hand)}</td><td class="num">${S.qty(s.allocated)}</td><td class="num">${S.qty(s.free)}</td></tr>`).join("")
+          : `<tr><td colspan="8" class="empty">Belum ada stok component. Stok bertambah saat barang SPO lulus QC.</td></tr>`}</tbody></table></div>
+      <section class="card" data-msg="adj">
+        <h2 class="card-t">Adjustment stok</h2>
+        <p class="hint">Untuk koreksi stok di luar SPO, misalnya stok lama yang ditemukan atau barang hilang. Angka minus untuk mengurangi.</p>
+        <div class="edit-fields">
+          <label class="field grow" for="adj-sku"><span class="field-l">Component</span><select id="adj-sku" class="input" data-bind="adj.sku"><option value="">Pilih…</option>${st.idx.items.map((i) => `<option value="${esc(i.sku)}"${i.sku === a.sku ? " selected" : ""}>${esc(i.sku)} · ${esc(i.description)}</option>`).join("")}</select></label>
+          <label class="field" for="adj-size"><span class="field-l">Size</span><select id="adj-size" class="input" data-bind="adj.size_code"><option value="">Pilih…</option>${st.idx.sizes.filter((s) => s.active).map((s) => `<option${s.code === a.size_code ? " selected" : ""}>${esc(s.code)}</option>`).join("")}</select></label>
+          <label class="field" for="adj-qty"><span class="field-l">Jumlah (+/−)</span><input id="adj-qty" class="input num w-m" inputmode="decimal" value="${esc(a.qty)}" data-bind="adj.qty" placeholder="misal 5 atau -2"></label>
+          <label class="field grow" for="adj-reason"><span class="field-l">Alasan (wajib)</span><input id="adj-reason" class="input" value="${esc(a.reason)}" data-bind="adj.reason" placeholder="Misalnya stok opname"></label>
+          <button class="btn btn-primary" data-action="adj-save">Simpan adjustment</button>
+        </div>
+        ${inlineMsg("adj")}
+        ${adjs.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Tanggal</th><th>Component</th><th>Size</th><th class="num">Jumlah</th><th>Alasan</th><th>Oleh</th><th></th></tr></thead><tbody>
+          ${adjs.map((x) => `<tr class="${x.voided_at ? "voided" : ""}"><td class="nowrap">${S.fmtDate(x.created_at)}</td><td class="mono">${esc(x.sku)}</td><td class="mono">${esc(x.size_code)}</td>
+            <td class="num">${x.qty > 0 ? "+" : ""}${S.qty(x.qty)}</td><td class="note-cell">${esc(x.reason)}${x.voided_at ? `<div class="small bad-text">Dibatalkan ${esc(x.voided_by || "")}</div>` : ""}</td><td>${esc(x.created_by)}</td>
+            <td>${x.voided_at ? "" : `<button class="link small danger-text" data-action="adj-void" data-id="${esc(x.id)}">Batalkan</button>`}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      </section>`;
+  }
+
+  function fulCsv(F) {
+    const head = ["Urutan", "Key", "PO Number", "Customer", "Tgl tiket", "Deadline", "SKU", "Item Name", "Size", "Qty", "Status Jira", "Hasil", "Component dibutuhkan", "Kurang"];
+    const lines = fulTicketRows(F).map(({ x, i, r }) => csvLine([i + 1, x.key, x.po_number, x.customer_name, x.created_date, x.deadline, x.sku, x.item_name, x.size, x.qty, x.status,
+      r.ok ? "Bisa dipenuhi" : "Back order", r.needs.map((n) => `${n.sku} ${n.size} x${n.need}`).join("; "), r.short.map((n) => `${n.sku} ${n.size} kurang ${S.r2(n.need - n.have)}`).join("; ")]));
+    return [csvLine(head)].concat(lines).join("\n");
   }
 
   // ------------------------------------------------------------------
   // SETTINGS
   // ------------------------------------------------------------------
+  function fulSettingsCard() {
+    const cur = Number(st.data.app_settings.consume_from) || 3;
+    const byRank = {};
+    (st.data.tickets || []).forEach((t) => { const r = FUL.statusRank(t.status); if (r != null && r < 9 && !byRank[r]) byRank[r] = t.status; });
+    if (!byRank[cur]) byRank[cur] = String(cur);
+    const opts = Object.keys(byRank).map(Number).sort((a, b) => a - b);
+    return `<section class="card" data-msg="ful-set">
+      <h2 class="card-t">Fulfillment PO</h2>
+      <label class="field" for="set-consume"><span class="field-l">Component dianggap sudah terpakai mulai status Jira</span>
+        <select id="set-consume" class="input" data-consume-from>${opts.map((r) => `<option value="${r}"${r === cur ? " selected" : ""}>${esc(byRank[r])}</option>`).join("")}</select></label>
+      <p class="hint">Tiket di bawah status ini dianggap masih menunggu component dan ikut antrian alokasi. Tiket di status ini ke atas mengurangi stok. Status 9.x (Rejected, Cancelled) selalu diabaikan. Perubahan berlaku untuk upload berikutnya.</p>
+      ${inlineMsg("ful-set")}
+    </section>`;
+  }
+
   function settingsView() {
     return `
-      <section class="head-row"><div><h1>Settings</h1><p class="sub">Daftar ukuran dan lokasi receiving.</p></div></section>
+      <section class="head-row"><div><h1>Settings</h1><p class="sub">Daftar ukuran, lokasi receiving, dan aturan fulfillment.</p></div></section>
+      ${fulSettingsCard()}
       <div class="two-col">
         <section class="card" data-msg="sizes">
           <h2 class="card-t">Ukuran</h2>
@@ -836,7 +1113,8 @@
     if (!st.idx) { $app.innerHTML = `<div class="gate"><p>Memuat data…</p></div>`; return; }
     if (st.view === "print") { $app.innerHTML = printView() + toasts(false); document.body.classList.add("is-print"); return; }
     document.body.classList.remove("is-print");
-    const views = { orders: ordersView, edit: editorView, detail: detailView, recap: recapView, items: itemsView, settings: settingsView };
+    const views = { orders: ordersView, edit: editorView, detail: detailView, recap: recapView, items: itemsView, settings: settingsView,
+      styles: stylesView, fulfil: fulfilView };
     const inner = (views[st.view] || ordersView)();
     $app.innerHTML = shell(inner) + toasts(inner.includes("data-inline-msg"));
     if (st.view === "detail") updateActSums();
@@ -864,7 +1142,7 @@
     const t = ev.target;
     if (t.dataset.bind) {
       setPath(t.dataset.bind, t.type === "checkbox" ? t.checked : t.value);
-      if (/^(filter|recap)\./.test(t.dataset.bind) && t.type !== "date") render();
+      if (/^(filter|recap|styleF|fulT)\.|^compQ$/.test(t.dataset.bind) && t.type !== "date") render();
       return;
     }
     if (t.dataset.line != null && st.draft) {
@@ -879,9 +1157,17 @@
 
   $app.addEventListener("change", (ev) => {
     const t = ev.target;
+    if (t.dataset.import) { handleImport(t.dataset.import, t); return; }
+    if (t.dataset.bomQty) {
+      st.msgAt = "bom"; const sku = st.bomEdit, comp = t.dataset.bomQty;
+      run(() => st.store.saveBom(sku, comp, num(t.value)), `Qty ${comp} untuk ${sku} disimpan.`); return;
+    }
+    if (t.dataset.consumeFrom != null) {
+      st.msgAt = "ful-set"; run(() => st.store.saveAppSettings({ consume_from: Number(t.value) }), "Aturan status disimpan."); return;
+    }
     if (t.dataset.bind) {
       setPath(t.dataset.bind, t.type === "checkbox" ? t.checked : t.value);
-      if (/^(filter|recap)\./.test(t.dataset.bind)) render();
+      if (/^(filter|recap|styleF|fulT)\.|^compQ$/.test(t.dataset.bind)) render();
       return;
     }
     if (t.dataset.line != null && t.dataset.f === "sku" && st.draft) {
@@ -1050,6 +1336,62 @@
         if (ok) { st.voiding = null; render(); }
         break;
       }
+
+      // ---- import file ----
+      case "template": downloadText(`template-${b.dataset.kind}.csv`, FUL.TEMPLATES[b.dataset.kind]); setFlash("Template diunduh. Isi di Excel, simpan, lalu import di sini."); render(); break;
+      case "imp-cancel": st.imp = null; render(); break;
+      case "imp-save": {
+        const p = st.imp; if (!p) break;
+        let fn, msg;
+        if (p.kind === "jira") {
+          fn = () => st.store.uploadJira(p.tickets, p.filename, st.user);
+          msg = (r) => `${S.qty(p.tickets.length)} tiket tersimpan (${S.qty(r.added)} baru, ${S.qty(r.updated)} diperbarui).${r.newStyles ? ` ${S.qty(r.newStyles)} style baru dibuat, petakan component-nya di menu Style.` : ""}`;
+        } else {
+          fn = () => st.store[IMPORTS[p.kind].save](p.rows, st.user);
+          msg = (r) => `Import ${IMPORTS[p.kind].what} selesai: ${S.qty(r.added)} baru, ${S.qty(r.updated)} diperbarui.`;
+        }
+        const r = await run(fn, msg);
+        if (r) { st.imp = null; render(); }
+        break;
+      }
+
+      // ---- style dan pemetaan ----
+      case "style-show": st.styleF.show = b.dataset.v; render(); break;
+      case "bom-edit": st.bomEdit = st.bomEdit === b.dataset.sku ? null : b.dataset.sku; st.bomNew = { comp: "", qty: "1" }; render(); break;
+      case "bom-add": {
+        const comp = String((st.bomNew || {}).comp || "").trim().toUpperCase(), qty = num((st.bomNew || {}).qty || 1);
+        if (!comp) { failHere(b, "Ketik atau pilih SKU component dulu."); break; }
+        if (!st.data.items.some((i) => i.sku === comp)) { failHere(b, `Component ${comp} belum ada. Tambahkan dulu di menu Component.`); break; }
+        if (!(qty > 0)) { failHere(b, "Qty per pcs harus lebih dari 0."); break; }
+        const ok = await run(() => st.store.saveBom(st.bomEdit, comp, qty).then(() => true), `${comp} ×${S.qty(qty)} ditambahkan ke ${st.bomEdit}.`);
+        if (ok) { st.bomNew = { comp: "", qty: "1" }; render(); }
+        break;
+      }
+      case "bom-del": await run(() => st.store.deleteBom(st.bomEdit, b.dataset.comp), `${b.dataset.comp} dihapus dari ${st.bomEdit}.`); break;
+
+      // ---- fulfillment ----
+      case "ful-tab": st.fulT.tab = b.dataset.v; render(); break;
+      case "ful-res": st.fulT.res = b.dataset.v; render(); break;
+      case "ful-po": Object.assign(st.fulT, { tab: "tickets", po: b.dataset.po, res: "", q: "" }); render(); window.scrollTo(0, 0); break;
+      case "ful-csv": downloadText(`fulfillment-po-${S.today()}.csv`, fulCsv(st.idx.ful)); setFlash("CSV dibuat."); render(); break;
+      case "prio-move": case "prio-top": case "prio-reset": {
+        let list = st.idx.ful.poList.map((p) => p.po_number);
+        if (a === "prio-reset") list = [];
+        else {
+          const i = list.indexOf(b.dataset.po);
+          const j = a === "prio-top" ? 0 : Math.max(0, Math.min(list.length - 1, i + Number(b.dataset.d)));
+          list.splice(i, 1); list.splice(j, 0, b.dataset.po);
+        }
+        await run(() => st.store.setPoPriorities(list.map((po, k) => ({ po_number: po, priority: k + 1 }))),
+          a === "prio-reset" ? "Antrian kembali ke FIFO." : `Prioritas ${b.dataset.po} diubah.`);
+        break;
+      }
+      case "adj-save": {
+        const ok = await run(() => st.store.saveAdjustment({ ...st.adj, qty: num(st.adj.qty) }, st.user).then(() => true), "Adjustment disimpan.");
+        if (ok) { st.adj = { sku: st.adj.sku, size_code: st.adj.size_code, qty: "", reason: "" }; render(); }
+        break;
+      }
+      case "adj-void": await run(() => st.store.voidAdjustment(b.dataset.id, st.user), "Adjustment dibatalkan."); break;
 
       case "recap-tab": st.recap.tab = b.dataset.v; render(); break;
       case "csv-download": {
