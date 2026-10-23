@@ -105,6 +105,12 @@
     _commit(next) { this.state = next; this._write(); }
 
     async resetDemo() { this._commit(seed()); }
+    // Kosong total untuk mencoba data asli: hanya ukuran, lokasi, dan pengaturan yang tersisa.
+    async clearAll() {
+      const s = seed();
+      this._commit({ seq: 0, sizes: s.sizes, locations: s.locations, items: [], orders: [], lines: [], events: [],
+        styles: [], bom: [], tickets: [], po_priority: [], adjustments: [], uploads: [], app_settings: s.app_settings });
+    }
     async loadAll() { return clone(this.state); }
 
     async saveItem(item) {

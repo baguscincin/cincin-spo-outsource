@@ -1020,9 +1020,10 @@
       </div>
       ${st.store.mode === "demo" ? `<section class="card">
         <h2 class="card-t">Data demo</h2>
-        <p class="hint">Mode demo menyimpan data di browser ini saja. Data contoh bisa dikembalikan ke awal kapan saja.</p>
-        <div class="actions">${st.confirm === "reset" ? `<span class="confirm">Semua data demo di browser ini akan dihapus. <button class="btn btn-danger" data-action="reset-demo">Ya, reset</button><button class="btn btn-ghost" data-action="cancel-confirm">Batal</button></span>`
-          : `<button class="btn btn-ghost danger-text" data-action="ask" data-key="reset">Reset data demo</button>`}</div></section>` : ""}`;
+        <p class="hint">Mode demo menyimpan data di browser ini saja. Pilih "Kosongkan semua data" untuk mencoba data asli dari nol, atau kembalikan data contoh kapan saja.</p>
+        <div class="actions">${st.confirm === "reset" ? `<span class="confirm">Semua data di browser ini diganti data contoh. <button class="btn btn-danger" data-action="reset-demo">Ya, pakai data contoh</button><button class="btn btn-ghost" data-action="cancel-confirm">Batal</button></span>`
+          : st.confirm === "clear" ? `<span class="confirm">Semua SPO, component, style, tiket Jira, dan stok di browser ini akan dihapus. Ukuran dan lokasi tetap. <button class="btn btn-danger" data-action="clear-demo">Ya, kosongkan</button><button class="btn btn-ghost" data-action="cancel-confirm">Batal</button></span>`
+          : `<button class="btn" data-action="ask" data-key="clear">Kosongkan semua data</button><button class="btn btn-ghost danger-text" data-action="ask" data-key="reset">Kembalikan data contoh</button>`}</div></section>` : ""}`;
   }
 
   // ------------------------------------------------------------------
@@ -1419,7 +1420,8 @@
       }
       case "add-size": { const ok = await run(() => st.store.saveSize({ code: st.newSize, sort: st.idx.sizes.length + 1, active: true }).then(() => true), "Ukuran ditambahkan."); if (ok) { st.newSize = ""; render(); } break; }
       case "add-loc": { const ok = await run(() => st.store.saveLocation({ name: st.newLoc, active: true }).then(() => true), "Lokasi ditambahkan."); if (ok) { st.newLoc = ""; render(); } break; }
-      case "reset-demo": await run(() => st.store.resetDemo(), "Data demo dikembalikan ke awal."); st.confirm = null; go("orders"); break;
+      case "reset-demo": await run(() => st.store.resetDemo(), "Data contoh dikembalikan."); st.confirm = null; go("orders"); break;
+      case "clear-demo": await run(() => st.store.clearAll(), "Semua data dikosongkan. Mulai dari menu Component."); st.confirm = null; go("orders"); break;
     }
   });
 
