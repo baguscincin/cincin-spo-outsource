@@ -6,6 +6,7 @@
   const CFG = window.SPO_CONFIG || {};
   const $app = document.getElementById("app");
   const NAME_KEY = "spo_outsource_user_name";
+  const GUIDE_KEY = "spo_outsource_hide_guide";
 
   const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const lsGet = (k) => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } };
@@ -17,8 +18,18 @@
     view: "orders", orderId: null, draft: null,
     filter: { q: "", status: "ACTIVE" },
     recap: { tab: "events", from: "", to: "", supplier: "", type: "", q: "", showVoid: false, onlyOpen: true },
-    act: null, confirm: null, voiding: null, itemEdit: null, flash: null, error: null, busy: false,
+    act: null, confirm: null, voiding: null, itemEdit: null, quickItem: null, flash: null, error: null, busy: false,
+    // msgAt = nama blok tempat error ditampilkan (data-msg). Kosong = tampil sebagai pop up.
+    msgAt: null, scrollMsg: false,
   };
+
+  let flashTimer = null;
+  function setFlash(text) {
+    st.flash = text;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => { st.flash = null; const t = document.querySelector(".toast-good"); if (t) t.remove(); }, 5000);
+  }
+  function setError(text) { st.error = text; st.flash = null; st.scrollMsg = true; }
 
   // ------------------------------------------------------------------
   // DATA
@@ -57,10 +68,10 @@
     try {
       const r = await fn();
       await reload();
-      if (okMsg) st.flash = typeof okMsg === "function" ? okMsg(r) : okMsg;
+      if (okMsg) setFlash(typeof okMsg === "function" ? okMsg(r) : okMsg);
       return r;
     } catch (e) {
-      st.error = e.message || String(e);
+      setError(e.message || String(e));
       try { await reload(); } catch (_) { /* tetap tampilkan error awal */ }
     } finally {
       st.busy = false; render();
@@ -69,7 +80,7 @@
 
   function go(view, orderId) {
     st.view = view; st.orderId = orderId || null; st.act = null; st.confirm = null; st.voiding = null;
-    st.error = null; st.flash = null;
+    st.error = null; st.msgAt = null; st.quickItem = null;
     if (view === "edit") st.draft = makeDraft(orderId);
     render(); window.scrollTo(0, 0);
   }
@@ -82,11 +93,17 @@
   const typePill = (t) => pill((S.EVENT_TYPES[t] || {}).label || t, (S.EVENT_TYPES[t] || {}).tone || "muted");
   const isOverdue = (o) => o.status === "OPEN" && o.due_date && o.due_date < S.today();
 
-  function messages() {
+  // Error ditampilkan di blok tempat tombol diklik, supaya tidak perlu scroll ke atas.
+  function inlineMsg(key) {
+    if (!st.error || st.msgAt !== key) return "";
+    return `<div class="msg msg-bad" role="alert" data-inline-msg><strong>Belum tersimpan.</strong> ${esc(st.error)}</div>`;
+  }
+  // Pop up di bawah layar: pesan berhasil, dan error yang bloknya tidak tampil.
+  function toasts(errorShownInline) {
     let h = "";
-    if (st.error) h += `<div class="msg msg-bad" role="alert"><strong>Tidak tersimpan.</strong> ${esc(st.error)}</div>`;
-    if (st.flash) h += `<div class="msg msg-good" role="status">${esc(st.flash)}</div>`;
-    return h;
+    if (st.error && !errorShownInline) h += `<div class="toast toast-bad" role="alert"><div><strong>Belum tersimpan.</strong> ${esc(st.error)}</div><button class="toast-x" data-action="close-msg" aria-label="Tutup pesan">×</button></div>`;
+    if (st.flash) h += `<div class="toast toast-good" role="status"><div>${esc(st.flash)}</div><button class="toast-x" data-action="close-msg" aria-label="Tutup pesan">×</button></div>`;
+    return h ? `<div class="toasts">${h}</div>` : "";
   }
 
   function sizesFor(lines, includeActive) {
@@ -114,7 +131,7 @@
           </div>
         </div>
       </header>
-      <main class="page">${st.busy ? `<div class="busy" aria-live="polite">Menyimpan…</div>` : ""}${messages()}${inner}</main>`;
+      <main class="page">${st.busy ? `<div class="busy" aria-live="polite">Menyimpan…</div>` : ""}${inner}</main>`;
   }
 
   // ------------------------------------------------------------------
@@ -133,18 +150,29 @@
     const open = all.filter((x) => x.o.status === "OPEN");
     const sum = (k) => open.reduce((s, x) => s + x.t[k], 0);
     const kpis = [
-      ["Order open", open.length, ""],
+      ["Order berjalan", open.length, ""],
       ["Lewat due date", open.filter((x) => isOverdue(x.o)).length, open.some((x) => isOverdue(x.o)) ? "bad" : ""],
-      ["Menunggu QC", S.qty(sum("awaiting")), sum("awaiting") > 0 ? "warn" : ""],
-      ["Di repair", S.qty(sum("repair")), sum("repair") > 0 ? "warn" : ""],
-      ["Damaged belum diganti", S.qty(sum("damagedOpen")), sum("damagedOpen") > 0 ? "bad" : ""],
+      ["Pcs menunggu QC", S.qty(sum("awaiting")), sum("awaiting") > 0 ? "warn" : ""],
+      ["Pcs di repair", S.qty(sum("repair")), sum("repair") > 0 ? "warn" : ""],
+      ["Pcs damaged belum diganti", S.qty(sum("damagedOpen")), sum("damagedOpen") > 0 ? "bad" : ""],
     ];
     const seg = [["ACTIVE", "Belum selesai"], ["DRAFT", "Draft"], ["OPEN", "Open"], ["COMPLETED", "Completed"], ["ALL", "Semua"]];
+    const guide = lsGet(GUIDE_KEY) ? "" : `
+      <section class="guide" aria-label="Cara pakai">
+        <div class="guide-head"><strong>Cara pakai, 4 langkah</strong><button class="link small" data-action="hide-guide">Sembunyikan panduan</button></div>
+        <ol class="steps">
+          <li><b>Buat SPO</b><span>Klik "Buat SPO baru", isi supplier, pilih SKU, isi qty per ukuran.</span></li>
+          <li><b>Submit dan cetak</b><span>Setelah Submit, SPO dapat nomor. Cetak 2 lembar: arsip internal dan untuk supplier.</span></li>
+          <li><b>Barang datang</b><span>Buka order, klik "Barang datang", isi jumlah yang datang per ukuran.</span></li>
+          <li><b>Hasil QC</b><span>Klik "Hasil QC", isi Pass, Reject, atau Damaged. Order selesai sendiri kalau semua sudah Pass.</span></li>
+        </ol>
+      </section>`;
     return `
       <section class="head-row">
-        <div><h1>Supplier purchase outsource</h1><p class="sub">Order ke vendor outsource dengan qty per ukuran, sampai lulus QC.</p></div>
-        <button class="btn btn-primary" data-action="new-order">Buat SPO baru</button>
+        <div><h1>Supplier purchase outsource</h1><p class="sub">Order ke vendor outsource dengan qty per ukuran, sampai lulus QC.${lsGet(GUIDE_KEY) ? ` <button class="link" data-action="show-guide">Lihat cara pakai</button>` : ""}</p></div>
+        <button class="btn btn-primary btn-lg" data-action="new-order">+ Buat SPO baru</button>
       </section>
+      ${guide}
       <section class="kpis">${kpis.map(([l, v, tone]) => `<div class="kpi${tone ? " kpi-" + tone : ""}"><div class="kpi-v">${v}</div><div class="kpi-l">${l}</div></div>`).join("")}</section>
       <section class="toolbar">
         <input id="f-q" class="input" type="search" placeholder="Cari SPO, supplier, SKU…" value="${esc(st.filter.q)}" data-bind="filter.q">
@@ -155,8 +183,8 @@
         <tbody>${list.length ? list.map(({ o, lines, t }) => {
           const pct = t.ordered ? Math.min(100, Math.round((t.ordered - t.outstanding) / t.ordered * 100)) : 0;
           const flags = [];
-          if (t.awaiting > 0) flags.push(pill("QC " + S.qty(t.awaiting), "warn"));
-          if (t.repair > 0) flags.push(pill("Repair " + S.qty(t.repair), "warn"));
+          if (t.awaiting > 0) flags.push(pill("Perlu QC " + S.qty(t.awaiting), "warn"));
+          if (t.repair > 0) flags.push(pill("Di repair " + S.qty(t.repair), "warn"));
           if (t.damagedOpen > 0) flags.push(pill("Damaged " + S.qty(t.damagedOpen), "bad"));
           return `<tr class="row-link" data-action="open-order" data-id="${o.id}" tabindex="0">
             <td class="mono strong nowrap">${o.spo_number ? esc(o.spo_number) : `<span class="muted">Draft</span>`}</td>
@@ -170,7 +198,8 @@
             <td>${o.status === "DRAFT" ? "" : `<div class="bar" title="${pct}% selesai"><span style="width:${pct}%"></span></div>`}</td>
             <td class="num nowrap">${S.money(t.value - t.discount)}</td></tr>`;
         }).join("") : `<tr><td colspan="10" class="empty">Tidak ada order di filter ini.</td></tr>`}</tbody>
-      </table></div>`;
+      </table></div>
+      ${list.length ? `<p class="hint">Klik baris order untuk membuka, mencatat barang datang, QC, atau mencetak SPO.</p>` : ""}`;
   }
 
   // ------------------------------------------------------------------
@@ -215,13 +244,14 @@
       </section>
       <section class="card">
         <div class="card-head"><h2 class="card-t">Item dan qty per ukuran</h2>
-          ${items.length ? "" : `<span class="pill pill-bad">Belum ada item. Tambahkan dulu di menu Items.</span>`}</div>
+          ${items.length ? "" : `<span class="pill pill-bad">Belum ada SKU. Klik "SKU belum ada? Tambah SKU baru" di bawah tabel.</span>`}</div>
+        <p class="hint">Pilih SKU, lalu isi jumlah di kolom ukuran yang dipesan. Ukuran yang tidak dipesan biarkan kosong.</p>
         <div class="table-wrap"><table class="tbl tbl-edit">
           <thead><tr><th>#</th><th class="w-sku">SKU general</th><th>Deskripsi</th><th>SKU supplier</th><th>Unit</th><th class="num">Harga</th><th class="num">Disc %</th>
             ${sizes.map((s) => `<th class="num size-h">${esc(s)}</th>`).join("")}<th class="num">Qty</th><th class="num">Jumlah</th><th></th></tr></thead>
           <tbody>${d.lines.map((l, i) => `<tr>
             <td class="muted">${i + 1}</td>
-            <td><select id="l${i}-sku" class="input" data-line="${i}" data-f="sku"><option value="">Pilih SKU…</option>${items.map((it) => `<option value="${esc(it.sku)}"${it.sku === l.sku ? " selected" : ""}>${esc(it.sku)}</option>`).join("")}</select></td>
+            <td><select id="l${i}-sku" class="input" data-line="${i}" data-f="sku"><option value="">Pilih SKU…</option>${items.map((it) => `<option value="${esc(it.sku)}"${it.sku === l.sku ? " selected" : ""}>${esc(it.sku)} · ${esc(it.description)}</option>`).join("")}</select></td>
             <td><input id="l${i}-desc" class="input w-desc" value="${esc(l.description)}" data-line="${i}" data-f="description"></td>
             <td><input id="l${i}-ssku" class="input w-s" value="${esc(l.supplier_sku)}" data-line="${i}" data-f="supplier_sku"></td>
             <td><input id="l${i}-unit" class="input w-xs" value="${esc(l.unit)}" data-line="${i}" data-f="unit"></td>
@@ -236,16 +266,56 @@
             <td class="num strong" id="d-qty">${S.qty(d.lines.reduce((s, l) => s + S.lineQty(l), 0))}</td>
             <td class="num strong nowrap" id="d-amt">${S.money(d.lines.reduce((s, l) => s + S.lineAmount(l), 0))}</td><td></td></tr></tfoot>
         </table></div>
-        <p class="hint">Harga dalam IDR. Jumlah = qty × harga × (1 − diskon). Ukuran tanpa qty tidak disimpan.</p>
+        <p class="hint">Harga dalam Rupiah per pcs. Jumlah = qty × harga × (1 − diskon %).</p>
+        ${quickItemForm()}
       </section>
-      <section class="actions">
-        <button class="btn btn-primary" data-action="submit-draft">Simpan & Submit</button>
-        <button class="btn" data-action="save-draft">Simpan draft</button>
-        <span class="spacer"></span>
-        ${d.id && !d.spo_number ? (st.confirm === "delete-draft"
-          ? `<span class="confirm">Hapus draft ini? <button class="btn btn-danger" data-action="delete-draft">Ya, hapus</button><button class="btn btn-ghost" data-action="cancel-confirm">Batal</button></span>`
-          : `<button class="btn btn-ghost danger-text" data-action="ask" data-key="delete-draft">Hapus draft</button>`) : ""}
+      <section class="card actions-card" data-msg="editor">
+        ${inlineMsg("editor")}
+        ${st.confirm === "submit" ? submitConfirm() : `
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" data-action="submit-draft">Submit SPO</button>
+          <button class="btn" data-action="save-draft">Simpan dulu sebagai draft</button>
+          <span class="spacer"></span>
+          ${d.id && !d.spo_number ? (st.confirm === "delete-draft"
+            ? `<span class="confirm">Hapus draft ini? <button class="btn btn-danger" data-action="delete-draft">Ya, hapus</button><button class="btn btn-ghost" data-action="cancel-confirm">Batal</button></span>`
+            : `<button class="btn btn-ghost danger-text" data-action="ask" data-key="delete-draft">Hapus draft</button>`) : ""}
+        </div>
+        <p class="hint">Draft masih bisa diubah kapan saja. Setelah Submit, SPO mendapat nomor dan siap dicetak.</p>`}
       </section>`;
+  }
+
+  function submitConfirm() {
+    const d = st.draft;
+    const qty = d.lines.reduce((s, l) => s + S.lineQty(l), 0), amt = d.lines.reduce((s, l) => s + S.lineAmount(l), 0);
+    const nItems = d.lines.filter((l) => l.sku).length;
+    return `<div class="confirm-box" role="alertdialog" aria-labelledby="sc-t">
+      <h3 id="sc-t">Submit SPO ke ${esc(d.supplier)}?</h3>
+      <p>${nItems} SKU, total <b>${S.qty(qty)} pcs</b>, nilai <b>${S.money(amt)}</b>.</p>
+      <p class="hint">Setelah Submit, SPO mendapat nomor resmi dan tidak bisa diedit lagi kecuali belum ada barang yang datang.</p>
+      <div class="actions"><button class="btn btn-primary btn-lg" data-action="submit-confirm">Ya, submit</button><button class="btn btn-ghost" data-action="cancel-confirm">Periksa lagi</button></div></div>`;
+  }
+
+  function quickItemForm() {
+    const q = st.quickItem;
+    if (!q) return `<div><button class="link" data-action="quick-item">SKU belum ada? Tambah SKU baru</button></div>`;
+    return `<div class="quick-item" data-msg="quickitem">
+      <strong>Tambah SKU baru</strong>
+      <div class="inline-add">
+        <label class="field" for="q-sku"><span class="field-l">SKU</span><input id="q-sku" class="input mono w-m" value="${esc(q.sku)}" data-bind="quickItem.sku" placeholder="O-KNIT-SODA"></label>
+        <label class="field grow" for="q-desc"><span class="field-l">Deskripsi</span><input id="q-desc" class="input" value="${esc(q.description)}" data-bind="quickItem.description" placeholder="Outsource Knit Soda"></label>
+        <button class="btn btn-primary" data-action="quick-item-save">Simpan SKU</button>
+        <button class="btn btn-ghost" data-action="quick-item-cancel">Batal</button>
+      </div>
+      ${inlineMsg("quickitem")}
+    </div>`;
+  }
+
+  // Cek kelengkapan sebelum Submit, dengan pesan yang mudah dipahami.
+  function checkReadyToSubmit(payload) {
+    if (!String(payload.supplier || "").trim()) throw new Error("Supplier belum diisi. Isi nama supplier di bagian Header.");
+    if (!payload.lines.length) throw new Error("Belum ada item. Pilih SKU dan isi qty per ukuran.");
+    const empty = payload.lines.findIndex((l) => !Object.keys(l.sizes).length);
+    if (empty >= 0) throw new Error(`Baris ${empty + 1} (${payload.lines[empty].sku}) belum ada qty. Isi jumlah di kolom ukuran, atau hapus barisnya.`);
   }
 
   function draftPayload() {
@@ -284,12 +354,22 @@
   // DETAIL ORDER (OPEN / COMPLETED)
   // ------------------------------------------------------------------
   const ACTS = {
-    RECEIVE:         { label: "Receiving", help: "Barang datang dari vendor. Masuk ke antrian QC.", avail: (b) => b.can_receive, availLabel: "bisa diterima" },
-    QC:              { label: "QC", help: "Hasil QC dari barang yang menunggu QC. Reject masuk repair, Damaged tidak bisa diterima lagi.", avail: (b) => b.awaiting_qc, availLabel: "menunggu QC" },
-    REPAIR_RETURN:   { label: "Kembali dari repair", help: "Barang reject yang sudah diperbaiki dan kembali. Masuk lagi ke antrian QC.", avail: (b) => b.in_repair, availLabel: "di repair" },
-    DAMAGE_DISCOUNT: { label: "Diskon damaged", help: "Pakai ini kalau barang damaged tidak diganti vendor tapi diganti potongan harga. Qty ini dianggap selesai.", avail: (b) => Math.min(b.damaged_open, b.can_receive), availLabel: "damaged belum diganti" },
+    RECEIVE: { label: "Barang datang", avail: (b) => b.can_receive, availLabel: "Sisa yang ditunggu",
+      card: "Catat jumlah barang yang datang dari vendor.", none: "Tidak ada sisa order yang ditunggu.", fill: "Isi semua sesuai sisa",
+      help: "Isi jumlah barang yang datang per ukuran. Barang ini akan masuk antrian QC. Boleh sebagian dulu, sisanya dicatat saat datang lagi." },
+    QC: { label: "Hasil QC", avail: (b) => b.awaiting_qc, availLabel: "Menunggu QC",
+      card: "Catat hasil pemeriksaan: Pass, Reject, atau Damaged.", none: "Tidak ada barang yang menunggu QC.", fill: "Semua Pass",
+      help: "Pass = lulus, diterima. Reject = perlu diperbaiki, masuk repair. Damaged = rusak, tidak bisa diterima. Jumlah ketiganya tidak boleh lebih dari yang menunggu QC." },
+    REPAIR_RETURN: { label: "Kembali dari repair", avail: (b) => b.in_repair, availLabel: "Sedang di repair",
+      card: "Catat barang reject yang sudah selesai diperbaiki.", none: "Tidak ada barang di repair.", fill: "Semua sudah kembali",
+      help: "Isi jumlah barang yang sudah selesai diperbaiki. Barang ini akan masuk antrian QC lagi." },
+    DAMAGE_DISCOUNT: { label: "Diskon damaged", avail: (b) => Math.min(b.damaged_open, b.can_receive), availLabel: "Damaged belum diganti",
+      card: "Barang rusak tidak diganti vendor, diganti potongan harga.", none: "Tidak ada barang damaged.", fill: "Isi semua",
+      help: "Pakai ini HANYA kalau vendor tidak mengirim barang pengganti. Kalau vendor mengirim pengganti, catat lewat \"Barang datang\" saja." },
   };
-  const QC_ROWS = [["QC_PASS", "Pass"], ["QC_REJECT", "Reject"], ["QC_DAMAGED", "Damaged"]];
+  const QC_ROWS = [["QC_PASS", "Pass", "lulus"], ["QC_REJECT", "Reject", "perlu repair"], ["QC_DAMAGED", "Damaged", "rusak"]];
+  const lc = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+  const actTotal = (x, k) => Object.values(x.bal).reduce((s, b) => s + Math.max(0, ACTS[k].avail(b)), 0);
 
   function detailView() {
     const x = st.idx.orders[st.orderId];
@@ -304,25 +384,28 @@
         <div><button class="link back" data-action="nav" data-view="orders">← Semua order</button>
           <h1><span class="mono">${esc(o.spo_number)}</span> ${statusPill(o.status)}</h1>
           ${o.note ? `<p class="sub">${esc(o.note)}</p>` : ""}</div>
-        <div class="head-actions">${activeEvents === 0 ? (st.confirm === "reopen"
+        <div class="head-actions" data-msg="head">
+          <button class="btn btn-primary" data-action="print">Cetak SPO</button>
+          ${activeEvents === 0 ? (st.confirm === "reopen"
           ? `<span class="confirm">Kembalikan ke draft untuk diedit? <button class="btn" data-action="reopen">Ya</button><button class="btn btn-ghost" data-action="cancel-confirm">Batal</button></span>`
-          : `<button class="btn btn-ghost" data-action="ask" data-key="reopen">Edit order</button>`) : ""}</div>
+          : `<button class="btn" data-action="ask" data-key="reopen">Edit order</button>`) : ""}</div>
       </section>
+      ${inlineMsg("head")}
       <section class="info">${info.map(([k, v]) => `<div><div class="info-k">${k}</div><div class="info-v">${v}</div></div>`).join("")}</section>
       <section class="kpis kpis-sm">
-        ${[["Order", t.ordered], ["Received", t.received], ["Menunggu QC", t.awaiting, "warn"], ["Pass (final)", t.pass, "good"], ["Di repair", t.repair, "warn"], ["Damaged belum diganti", t.damagedOpen, "bad"], ["Outstanding", t.outstanding]]
+        ${[["Order", t.ordered], ["Sudah datang", t.received], ["Menunggu QC", t.awaiting, "warn"], ["Lulus QC", t.pass, "good"], ["Di repair", t.repair, "warn"], ["Damaged belum diganti", t.damagedOpen, "bad"], ["Sisa belum selesai", t.outstanding]]
           .map(([l, v, tone]) => `<div class="kpi${tone && v > 0 ? " kpi-" + tone : ""}"><div class="kpi-v">${S.qty(v)}</div><div class="kpi-l">${l}</div></div>`).join("")}
         <div class="kpi"><div class="kpi-v kpi-money">${S.money(t.value - t.discount)}</div><div class="kpi-l">Nilai${t.discount ? " (setelah potongan " + S.money(t.discount) + ")" : ""}</div></div>
       </section>
       ${o.status === "OPEN" ? actionPanel(x) : `<div class="msg msg-good">Semua qty sudah lulus QC atau diselesaikan dengan diskon. Order selesai.</div>`}
       <section class="card"><h2 class="card-t">Saldo per ukuran</h2>${lines.map((l) => balanceTable(l, bal)).join("")}</section>
-      <section class="card"><h2 class="card-t">Riwayat</h2>${historyTable(events, lines)}</section>`;
+      <section class="card"><h2 class="card-t">Riwayat</h2><p class="hint">Salah input? Klik "Batalkan" di baris yang salah, lalu catat ulang yang benar.</p>${historyTable(events, lines)}</section>`;
   }
 
   function balanceTable(l, bal) {
     const sizes = Object.keys(l.sizes).sort((a, b) => (st.idx.sizeSort[a] ?? 99) - (st.idx.sizeSort[b] ?? 99));
-    const rows = [["qty_ordered", "Order", ""], ["received", "Received", ""], ["awaiting_qc", "Menunggu QC", "warn"], ["qc_pass", "Pass (final)", "good"],
-      ["in_repair", "Di repair", "warn"], ["qc_damaged", "Damaged", "bad"], ["damage_discounted", "Diganti diskon", ""], ["outstanding", "Outstanding", "strong"]];
+    const rows = [["qty_ordered", "Order", ""], ["received", "Sudah datang", ""], ["awaiting_qc", "Menunggu QC", "warn"], ["qc_pass", "Lulus QC", "good"],
+      ["in_repair", "Di repair", "warn"], ["qc_damaged", "Damaged", "bad"], ["damage_discounted", "Diganti diskon", ""], ["outstanding", "Sisa belum selesai", "strong"]];
     return `<div class="line-block">
       <div class="line-title"><span class="mono strong">${esc(l.spo_line_id || "")}</span> <span class="mono">${esc(l.sku)}</span> <span class="muted">${esc(l.description || "")}</span>
         <span class="muted nowrap">· ${S.money(l.unit_price)}${l.discount_pct ? " −" + S.qty(l.discount_pct) + "%" : ""}</span></div>
@@ -336,49 +419,102 @@
 
   function actionPanel(x) {
     const a = st.act;
-    const tabs = Object.entries(ACTS).map(([k, v]) => `<button class="seg-btn${a && a.type === k ? " is-active" : ""}" data-action="act-type" data-v="${k}">${v.label}</button>`).join("");
-    if (!a) return `<section class="card act"><div class="card-head"><h2 class="card-t">Catat kejadian</h2><div class="seg">${tabs}</div></div>
-      <p class="hint">Pilih jenis kejadian di atas untuk mengisi qty per ukuran.</p></section>`;
+    if (!a) {
+      const cards = Object.entries(ACTS).map(([k, v]) => {
+        const n = actTotal(x, k);
+        return `<button class="act-card" data-action="act-type" data-v="${k}"${n > 0 ? "" : " disabled"}>
+          <span class="act-card-t">${v.label}</span>
+          <span class="act-card-n${n > 0 ? "" : " muted"}">${n > 0 ? `${S.qty(n)} pcs ${lc(v.availLabel)}` : v.none}</span>
+          <span class="act-card-h">${v.card}</span></button>`;
+      }).join("");
+      return `<section class="card act" data-msg="act"><h2 class="card-title">Apa yang mau dicatat?</h2><div class="act-cards">${cards}</div>${inlineMsg("act")}</section>`;
+    }
     const def = ACTS[a.type];
+    const tabs = Object.entries(ACTS).map(([k, v]) => `<button class="seg-btn${a.type === k ? " is-active" : ""}" data-action="act-type" data-v="${k}"${actTotal(x, k) > 0 ? "" : " disabled"}>${v.label}</button>`).join("");
     const sizes = sizesFor(x.lines, false);
     let body = "";
     for (const l of x.lines) {
       const avail = (s) => { const b = x.bal[l.id + "|" + s]; return b ? def.avail(b) : null; };
       const anyAvail = sizes.some((s) => (avail(s) || 0) > 0);
       const head = `<tr class="grp"><th colspan="${sizes.length + 2}"><span class="mono strong">${esc(l.sku)}</span> <span class="muted">${esc(l.description || "")}</span></th></tr>`;
-      const availRow = `<tr class="avail"><th scope="row">${def.availLabel}</th>${sizes.map((s) => { const v = avail(s); return `<td class="num">${v == null ? "" : S.qty(v)}</td>`; }).join("")}<td></td></tr>`;
-      const inputRow = (evType, label) => `<tr><th scope="row">${label}</th>${sizes.map((s) => {
+      const availRow = `<tr class="avail"><th scope="row">${def.availLabel}</th>${sizes.map((s) => { const v = avail(s); return `<td class="num" id="av-${l.id}|${esc(s)}">${v == null ? "" : S.qty(v)}</td>`; }).join("")}<td></td></tr>`;
+      const inputRow = (evType, label, sub) => `<tr><th scope="row">${label}${sub ? `<span class="row-sub">${sub}</span>` : ""}</th>${sizes.map((s) => {
         const v = avail(s); const key = `${l.id}|${s}|${evType}`;
         if (v == null) return `<td></td>`;
-        return `<td class="num"><input id="a-${esc(key)}" class="input num w-q" inputmode="decimal" aria-label="${label} ${esc(s)}" value="${esc(a.vals[key] || "")}" data-act="${esc(key)}"${v <= 0 ? " disabled" : ""}></td>`;
+        return `<td class="num"><input id="a-${esc(key)}" class="input num w-q" inputmode="decimal" aria-label="${label} ${esc(s)}" value="${esc(a.vals[key] || "")}" data-act="${esc(key)}"${v <= 0 ? ` disabled placeholder="–"` : ""}></td>`;
       }).join("")}<td class="num strong" id="sum-${l.id}-${evType}"></td></tr>`;
-      if (!anyAvail) { body += head + `<tr><td colspan="${sizes.length + 2}" class="muted small">Tidak ada qty yang bisa dicatat untuk item ini.</td></tr>`; continue; }
+      if (!anyAvail) { body += head + `<tr><td colspan="${sizes.length + 2}" class="muted small">Tidak ada yang perlu dicatat untuk item ini.</td></tr>`; continue; }
       body += head + availRow;
-      if (a.type === "QC") QC_ROWS.forEach(([t, lbl]) => (body += inputRow(t, lbl)));
-      else body += inputRow(a.type, "Qty");
+      if (a.type === "QC") QC_ROWS.forEach(([t, lbl, sub]) => (body += inputRow(t, lbl, sub)));
+      else body += inputRow(a.type, "Jumlah");
       if (a.type === "DAMAGE_DISCOUNT") {
         body += `<tr><th scope="row">Potongan (Rp)</th><td colspan="${sizes.length}"><input id="amt-${l.id}" class="input num w-m" inputmode="decimal" value="${esc(a.amounts[l.id] ?? "")}" data-amt="${l.id}" placeholder="${esc(String(Math.round(S.netUnitPrice(l))))} per pcs">
-          <span class="field-h">Kosongkan untuk memakai harga bersih × qty</span></td><td></td></tr>`;
+          <span class="field-h">Kosongkan kalau potongannya sama dengan harga barang</span></td><td></td></tr>`;
       }
     }
-    return `<section class="card act">
-      <div class="card-head"><h2 class="card-t">Catat kejadian</h2><div class="seg">${tabs}</div></div>
+    return `<section class="card act" data-msg="act">
+      <div class="card-head"><h2 class="card-title">${esc(def.label)}</h2><div class="seg">${tabs}</div></div>
       <p class="hint">${def.help}</p>
+      <div><button class="btn btn-sm" data-action="act-fill">${esc(def.fill)}</button></div>
       <div class="table-wrap"><table class="tbl tbl-act"><thead><tr><th></th>${sizes.map((s) => `<th class="num">${esc(s)}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>${body}</tbody></table></div>
+      <div class="act-live" id="act-live" aria-live="polite"></div>
       <div class="act-foot">
         <label class="field" for="a-date"><span class="field-l">Tanggal</span><input id="a-date" class="input" type="date" value="${esc(a.date)}" data-bind="act.date"></label>
-        <label class="field grow" for="a-note"><span class="field-l">Catatan</span><input id="a-note" class="input" value="${esc(a.note)}" data-bind="act.note" placeholder="${a.type === "QC" ? "Misalnya alasan reject" : "Misalnya no. surat jalan"}"></label>
+        <label class="field grow" for="a-note"><span class="field-l">Catatan (boleh kosong)</span><input id="a-note" class="input" value="${esc(a.note)}" data-bind="act.note" placeholder="${a.type === "QC" ? "Misalnya alasan reject" : "Misalnya no. surat jalan"}"></label>
         <div class="field"><span class="field-l">Dicatat oleh</span><span class="who-chip">${esc(st.user)}</span></div>
-        <button class="btn btn-primary" data-action="post-act">Simpan ${esc(def.label)}</button>
-        <button class="btn btn-ghost" data-action="act-cancel">Tutup</button>
+      </div>
+      ${inlineMsg("act")}
+      <div class="actions">
+        <button class="btn btn-primary btn-lg" id="act-save" data-action="post-act">Simpan ${esc(lc(def.label))}</button>
+        <button class="btn btn-ghost" data-action="act-cancel">Batal</button>
       </div></section>`;
+  }
+
+  // Cek qty yang sedang diketik terhadap saldo, tanpa menunggu tombol Simpan.
+  function actCheck(x) {
+    const a = st.act, def = ACTS[a.type]; const used = {}; let total = 0, negative = false;
+    for (const [k, v] of Object.entries(a.vals)) {
+      const q = num(v); if (!q) continue;
+      if (q < 0) negative = true;
+      const [line, size] = k.split("|");
+      used[line + "|" + size] = (used[line + "|" + size] || 0) + q; total += q;
+    }
+    const problems = [];
+    for (const [ls, q] of Object.entries(used)) {
+      const b = x.bal[ls]; const av = b ? def.avail(b) : 0;
+      if (q > av + 1e-9) problems.push({ ls, q, av });
+    }
+    return { total, problems, negative };
   }
 
   function updateActSums() {
     const a = st.act; if (!a) return;
+    const x = st.idx.orders[st.orderId]; if (!x) return;
     const sums = {};
     for (const [k, v] of Object.entries(a.vals)) { const [line, , t] = k.split("|"); sums[line + "-" + t] = (sums[line + "-" + t] || 0) + num(v); }
     document.querySelectorAll("[id^='sum-']").forEach((el) => { const v = sums[el.id.slice(4)] || 0; el.textContent = v ? S.qty(v) : ""; });
+
+    const chk = actCheck(x), def = ACTS[a.type];
+    const bad = new Set(chk.problems.map((p) => p.ls));
+    document.querySelectorAll("input[data-act]").forEach((el) => {
+      const [line, size] = el.dataset.act.split("|");
+      el.classList.toggle("is-over", bad.has(line + "|" + size) || num(el.value) < 0);
+    });
+    document.querySelectorAll("[id^='av-']").forEach((el) => el.classList.toggle("is-over", bad.has(el.id.slice(3))));
+    const live = document.getElementById("act-live"), save = document.getElementById("act-save");
+    const skuOf = {}; x.lines.forEach((l) => (skuOf[l.id] = l.sku));
+    let html = "", ok = false;
+    if (chk.negative) html = `<span class="bad-text">Jumlah tidak boleh minus.</span>`;
+    else if (chk.problems.length) {
+      html = chk.problems.map((p) => {
+        const [line, size] = p.ls.split("|");
+        const what = a.type === "QC" ? "Pass + Reject + Damaged" : "Jumlah";
+        return `<div class="bad-text">${esc(skuOf[line])} ukuran <b>${esc(size)}</b>: ${what} = ${S.qty(p.q)}, padahal ${lc(def.availLabel)} hanya ${S.qty(p.av)}. Kurangi ${S.qty(p.q - p.av)}.</div>`;
+      }).join("");
+    } else if (chk.total > 0) { html = `<span class="good-text">Siap disimpan: total ${S.qty(chk.total)} pcs.</span>`; ok = true; }
+    else html = `<span class="muted">Isi jumlah di kotak putih, sesuai ukurannya.</span>`;
+    if (live) live.innerHTML = html;
+    if (save) save.disabled = !ok;
   }
 
   function buildActEvents(x) {
@@ -420,9 +556,9 @@
           <td class="num nowrap">${e.amount ? S.money(e.amount) : ""}</td><td>${esc(e.recorded_by)}</td>
           <td class="note-cell">${esc(e.note || "")}${v ? `<div class="small bad-text">Dibatalkan ${esc(e.voided_by || "")}: ${esc(e.void_reason || "")}</div>` : ""}</td>
           <td>${v ? "" : `<button class="link small" data-action="void-start" data-id="${e.id}">Batalkan</button>`}</td></tr>`;
-        const form = st.voiding === e.id ? `<tr class="void-row"><td colspan="9"><div class="void-form">
-          <label class="field grow" for="void-reason"><span class="field-l">Alasan pembatalan</span><input id="void-reason" class="input" data-bind="voidReason" value="${esc(st.voidReason || "")}" placeholder="Misalnya salah ketik qty"></label>
-          <button class="btn btn-danger" data-action="void-confirm" data-id="${e.id}">Batalkan kejadian ini</button><button class="btn btn-ghost" data-action="void-cancel">Tutup</button></div></td></tr>` : "";
+        const form = st.voiding === e.id ? `<tr class="void-row"><td colspan="9" data-msg="void"><div class="void-form">
+          <label class="field grow" for="void-reason"><span class="field-l">Kenapa dibatalkan? (wajib)</span><input id="void-reason" class="input" data-bind="voidReason" value="${esc(st.voidReason || "")}" placeholder="Misalnya salah ketik qty"></label>
+          <button class="btn btn-danger" data-action="void-confirm" data-id="${e.id}">Ya, batalkan</button><button class="btn btn-ghost" data-action="void-cancel">Tidak jadi</button></div>${inlineMsg("void")}</td></tr>` : "";
         return row + form;
       }).join("")}</tbody></table></div>`;
   }
@@ -474,8 +610,8 @@
     events: [["date", "Tanggal"], ["spo", "SPO"], ["spo_line", "SPO Line"], ["supplier", "Supplier"], ["sku", "SKU"], ["description", "Deskripsi"], ["size", "Size"],
       ["type", "Kejadian"], ["qty", "Qty"], ["amount", "Potongan"], ["by", "Oleh"], ["note", "Catatan"], ["voided", "Dibatalkan"]],
     balance: [["spo", "SPO"], ["spo_line", "SPO Line"], ["supplier", "Supplier"], ["due", "Due"], ["sku", "SKU"], ["description", "Deskripsi"], ["size", "Size"],
-      ["ordered", "Order"], ["received", "Received"], ["awaiting", "Menunggu QC"], ["pass", "Pass"], ["repair", "Di repair"], ["damaged", "Damaged"],
-      ["discounted", "Diganti diskon"], ["outstanding", "Outstanding"]],
+      ["ordered", "Order"], ["received", "Sudah datang"], ["awaiting", "Menunggu QC"], ["pass", "Lulus QC"], ["repair", "Di repair"], ["damaged", "Damaged"],
+      ["discounted", "Diganti diskon"], ["outstanding", "Sisa belum selesai"]],
   };
   const NUM_COLS = new Set(["qty", "amount", "ordered", "received", "awaiting", "pass", "repair", "damaged", "discounted", "outstanding"]);
 
@@ -532,7 +668,7 @@
     const e = st.itemEdit || { sku: "", description: "", unit: "Each", active: true };
     return `
       <section class="head-row"><div><h1>Items</h1><p class="sub">Daftar SKU general untuk outsource. Satu SKU dipakai untuk semua ukuran.</p></div></section>
-      <section class="card">
+      <section class="card" data-msg="item">
         <h2 class="card-t">${e.original_sku ? "Edit " + esc(e.original_sku) : "Tambah item"}</h2>
         <div class="grid-form">
           <label class="field" for="i-sku"><span class="field-l">SKU <b class=req>*</b></span><input id="i-sku" class="input mono" value="${esc(e.sku)}" data-bind="itemEdit.sku"${e.original_sku ? " readonly" : ""}></label>
@@ -540,6 +676,7 @@
           <label class="field" for="i-unit"><span class="field-l">Unit</span><input id="i-unit" class="input" value="${esc(e.unit)}" data-bind="itemEdit.unit"></label>
           <label class="field check" for="i-active"><input id="i-active" type="checkbox" data-bind="itemEdit.active"${e.active !== false ? " checked" : ""}> Aktif (muncul di pilihan order)</label>
         </div>
+        ${inlineMsg("item")}
         <div class="actions"><button class="btn btn-primary" data-action="save-item">${e.original_sku ? "Simpan perubahan" : "Tambah item"}</button>
           ${e.original_sku ? `<button class="btn btn-ghost" data-action="item-cancel">Batal</button>` : ""}</div>
       </section>
@@ -556,7 +693,7 @@
     return `
       <section class="head-row"><div><h1>Settings</h1><p class="sub">Daftar ukuran dan lokasi receiving.</p></div></section>
       <div class="two-col">
-        <section class="card">
+        <section class="card" data-msg="sizes">
           <h2 class="card-t">Ukuran</h2>
           <table class="tbl"><thead><tr><th>Kode</th><th class="num">Urutan</th><th>Aktif</th></tr></thead><tbody>
             ${st.idx.sizes.map((s) => `<tr><td class="mono strong">${esc(s.code)}</td>
@@ -564,15 +701,17 @@
               <td><input type="checkbox" id="sza-${esc(s.code)}" aria-label="Aktif ${esc(s.code)}" data-size-active="${esc(s.code)}"${s.active ? " checked" : ""}></td></tr>`).join("")}
           </tbody></table>
           <div class="inline-add"><input id="new-size" class="input mono w-s" placeholder="Kode baru" data-bind="newSize"><button class="btn" data-action="add-size">Tambah ukuran</button></div>
+          ${inlineMsg("sizes")}
           <p class="hint">Ukuran nonaktif tidak muncul di order baru, tapi tetap tampil di order lama.</p>
         </section>
-        <section class="card">
+        <section class="card" data-msg="locs">
           <h2 class="card-t">Lokasi receiving</h2>
           <table class="tbl"><thead><tr><th>Lokasi</th><th>Aktif</th></tr></thead><tbody>
             ${st.data.locations.slice().sort((a, b) => a.name.localeCompare(b.name)).map((l, i) => `<tr><td>${esc(l.name)}</td>
               <td><input type="checkbox" id="loc-${i}" aria-label="Aktif ${esc(l.name)}" data-loc-active="${esc(l.name)}"${l.active ? " checked" : ""}></td></tr>`).join("")}
           </tbody></table>
           <div class="inline-add"><input id="new-loc" class="input" placeholder="Nama lokasi" data-bind="newLoc"><button class="btn" data-action="add-loc">Tambah lokasi</button></div>
+          ${inlineMsg("locs")}
         </section>
       </div>
       ${st.store.mode === "demo" ? `<section class="card">
@@ -580,6 +719,62 @@
         <p class="hint">Mode demo menyimpan data di browser ini saja. Data contoh bisa dikembalikan ke awal kapan saja.</p>
         <div class="actions">${st.confirm === "reset" ? `<span class="confirm">Semua data demo di browser ini akan dihapus. <button class="btn btn-danger" data-action="reset-demo">Ya, reset</button><button class="btn btn-ghost" data-action="cancel-confirm">Batal</button></span>`
           : `<button class="btn btn-ghost danger-text" data-action="ask" data-key="reset">Reset data demo</button>`}</div></section>` : ""}`;
+  }
+
+  // ------------------------------------------------------------------
+  // LEMBAR CETAK SPO: dua rangkap yang isinya sama, beda label saja.
+  // ------------------------------------------------------------------
+  const COPIES = ["Arsip Internal", "Untuk Supplier"];
+
+  function printView() {
+    const x = st.idx.orders[st.orderId];
+    if (!x || x.o.status === "DRAFT") return `<div class="gate"><div class="msg msg-bad">SPO ini belum di-submit, jadi belum bisa dicetak.</div></div>`;
+    const { o, lines } = x;
+    const C = CFG.COMPANY || {};
+    const sizes = sizesFor(lines, false);
+    const sizeTot = (s) => lines.reduce((t, l) => t + (Number(l.sizes[s]) || 0), 0);
+    const totalQty = lines.reduce((t, l) => t + S.lineQty(l), 0);
+    const gross = lines.reduce((t, l) => t + S.lineQty(l) * (Number(l.unit_price) || 0), 0);
+    const total = lines.reduce((t, l) => t + S.lineAmount(l), 0);
+    const anyDisc = lines.some((l) => Number(l.discount_pct) > 0);
+    const contact = [C.PHONE && "Telp " + C.PHONE, C.EMAIL].filter(Boolean).join(" · ");
+    const meta = [["Supplier", esc(o.supplier)], ["Ref supplier", esc(o.supplier_ref || "-")], ["Tanggal SPO", S.fmtDateLong(o.spo_date)],
+      ["Due date", S.fmtDateLong(o.due_date) || "-"], ["Lokasi receiving", esc(o.receiving_location || "-")]];
+    const sheet = (label) => `<article class="sheet">
+      <header class="sh-head">
+        <div class="sh-co"><div class="sh-co-name">${esc(C.NAME || "")}</div>${C.ADDRESS ? `<div>${esc(C.ADDRESS)}</div>` : ""}${contact ? `<div>${esc(contact)}</div>` : ""}</div>
+        <div class="sh-title"><div class="sh-copy">${esc(label)}</div><div class="sh-doc">Supplier Purchase Order</div><div class="sh-no">${esc(o.spo_number)}</div></div>
+      </header>
+      <dl class="sh-meta">${meta.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
+      <table class="sh-tbl">
+        <thead><tr><th>No</th><th>SKU</th><th>Deskripsi</th><th>SKU supplier</th>${sizes.map((s) => `<th class="num">${esc(s)}</th>`).join("")}
+          <th class="num">Qty</th><th class="num">Harga (Rp)</th>${anyDisc ? `<th class="num">Disc</th>` : ""}<th class="num">Jumlah (Rp)</th></tr></thead>
+        <tbody>${lines.map((l, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(l.sku)}</td><td>${esc(l.description || "")}</td><td>${esc(l.supplier_sku || "")}</td>
+          ${sizes.map((s) => `<td class="num">${l.sizes[s] ? S.qty(l.sizes[s]) : ""}</td>`).join("")}
+          <td class="num b">${S.qty(S.lineQty(l))} ${esc(l.unit || "")}</td><td class="num">${S.rp(l.unit_price)}</td>${anyDisc ? `<td class="num">${l.discount_pct ? S.qty(l.discount_pct) + "%" : ""}</td>` : ""}<td class="num">${S.rp(S.lineAmount(l))}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="4" class="b">Total</td>${sizes.map((s) => `<td class="num b">${S.qty(sizeTot(s))}</td>`).join("")}
+          <td class="num b">${S.qty(totalQty)}</td><td></td>${anyDisc ? "<td></td>" : ""}<td class="num b">${S.rp(total)}</td></tr></tfoot>
+      </table>
+      <div class="sh-bottom">
+        <div class="sh-note">${o.note ? `<div class="sh-label">Catatan</div><div>${esc(o.note)}</div>` : ""}</div>
+        <table class="sh-sum">
+          <tr><td>Total qty</td><td class="num">${S.qty(totalQty)} pcs</td></tr>
+          ${anyDisc ? `<tr><td>Subtotal</td><td class="num">${S.money(gross)}</td></tr><tr><td>Diskon</td><td class="num">− ${S.money(gross - total)}</td></tr>` : ""}
+          <tr class="grand"><td>Total harga</td><td class="num">${S.money(total)}</td></tr>
+        </table>
+      </div>
+      <div class="sh-sign">
+        ${[["Dibuat oleh", o.submitted_by || o.created_by || ""], ["Disetujui oleh", ""], ["Supplier", o.supplier]].map(([k, v]) => `<div class="sh-sign-box">
+          <div class="sh-label">${k}</div><div class="sh-sign-space"></div><div class="sh-sign-name">${esc(v) || "&nbsp;"}</div><div class="sh-sign-date">Tanggal:</div></div>`).join("")}
+      </div>
+      <footer class="sh-foot">${esc(o.spo_number)} · ${esc(label)} · dicetak ${S.fmtDateLong(S.today())}</footer>
+    </article>`;
+    return `<div class="print-bar no-print">
+        <button class="btn" data-action="print-back">← Kembali ke order</button>
+        <button class="btn btn-primary btn-lg" data-action="print-now">Cetak sekarang</button>
+        <span class="hint">Tercetak 2 lembar: lembar 1 untuk arsip internal, lembar 2 untuk supplier. Pilih kertas A4. Untuk dikirim lewat WhatsApp/email, pilih "Save as PDF" di jendela cetak.</span>
+      </div>
+      <div class="sheets">${COPIES.map(sheet).join("")}</div>`;
   }
 
   // ------------------------------------------------------------------
@@ -596,7 +791,7 @@
   function loginGate() {
     return `<div class="gate"><form class="gate-card" data-form="login">
       <div class="brand"><span class="brand-mark" aria-hidden="true">SPO</span><span>${esc(CFG.APP_NAME || "SPO Outsource")}</span></div>
-      <h1>Masuk</h1>${messages()}
+      <h1>Masuk</h1>${st.error ? `<div class="msg msg-bad" role="alert">${esc(st.error)}</div>` : ""}
       <label class="field" for="g-email"><span class="field-l">Email</span><input id="g-email" class="input" type="email" autocomplete="username" required></label>
       <label class="field" for="g-pass"><span class="field-l">Password</span><input id="g-pass" class="input" type="password" autocomplete="current-password" required></label>
       <button class="btn btn-primary" type="submit">${st.busy ? "Memeriksa…" : "Masuk"}</button></form></div>`;
@@ -612,12 +807,20 @@
     if (st.store.mode === "supabase" && !st.session) { $app.innerHTML = loginGate(); return; }
     if (!st.user) { $app.innerHTML = nameGate(); return; }
     if (!st.idx) { $app.innerHTML = `<div class="gate"><p>Memuat data…</p></div>`; return; }
+    if (st.view === "print") { $app.innerHTML = printView() + toasts(false); document.body.classList.add("is-print"); return; }
+    document.body.classList.remove("is-print");
     const views = { orders: ordersView, edit: editorView, detail: detailView, recap: recapView, items: itemsView, settings: settingsView };
-    $app.innerHTML = shell((views[st.view] || ordersView)());
+    const inner = (views[st.view] || ordersView)();
+    $app.innerHTML = shell(inner) + toasts(inner.includes("data-inline-msg"));
     if (st.view === "detail") updateActSums();
     if (focus) {
       const el = document.getElementById(focus);
       if (el) { el.focus(); try { if (sel != null && el.setSelectionRange) el.setSelectionRange(sel, sel); } catch (e) { /* input tanggal */ } }
+    }
+    if (st.scrollMsg) {
+      st.scrollMsg = false;
+      const m = document.querySelector("[data-inline-msg]");
+      if (m) m.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }
 
@@ -661,6 +864,7 @@
       if (it) { l.description = it.description; l.unit = it.unit || "Each"; }
       render(); return;
     }
+    const blk = t.closest("[data-msg]"); st.msgAt = blk ? blk.dataset.msg : null;
     if (t.dataset.sizeSort) { const s = st.idx.sizes.find((x) => x.code === t.dataset.sizeSort); run(() => st.store.saveSize({ ...s, sort: num(t.value) }), "Urutan ukuran disimpan"); return; }
     if (t.dataset.sizeActive) { const s = st.idx.sizes.find((x) => x.code === t.dataset.sizeActive); run(() => st.store.saveSize({ ...s, active: t.checked }), "Ukuran disimpan"); return; }
     if (t.dataset.locActive) { run(() => st.store.saveLocation({ name: t.dataset.locActive, active: t.checked }), "Lokasi disimpan"); }
@@ -688,12 +892,39 @@
     if (ev.key === "Enter" && ev.target.matches("tr.row-link")) ev.target.click();
   });
 
+  // Klik kotak angka langsung memilih isinya, jadi tinggal ketik angka baru.
+  $app.addEventListener("focusin", (ev) => {
+    if (ev.target.matches("input.num") && !ev.target.disabled) { try { ev.target.select(); } catch (e) { /* abaikan */ } }
+  });
+
+  // Tampilkan pesan error di blok tempat tombol diklik.
+  function failHere(b, msg) {
+    const blk = b.closest("[data-msg]"); st.msgAt = blk ? blk.dataset.msg : null;
+    setError(msg); render();
+  }
+
   $app.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-action]");
     if (!b) return;
     const a = b.dataset.action;
     const x = st.orderId && st.idx.orders[st.orderId];
+    if (a !== "close-msg") {
+      const blk = b.closest("[data-msg]"); st.msgAt = blk ? blk.dataset.msg : null;
+      st.error = null;
+    }
     switch (a) {
+      case "close-msg": st.error = null; st.flash = null; render(); break;
+      case "hide-guide": lsSet(GUIDE_KEY, "1"); render(); break;
+      case "show-guide": lsSet(GUIDE_KEY, ""); render(); break;
+      case "print": st.view = "print"; render(); window.scrollTo(0, 0); break;
+      case "print-back": go("detail", st.orderId); break;
+      case "print-now": {
+        const title = document.title;
+        document.title = x ? `${x.o.spo_number} ${x.o.supplier}` : title; // nama file kalau disimpan sebagai PDF
+        window.print();
+        document.title = title;
+        break;
+      }
       case "nav": go(b.dataset.view); break;
       case "new-order": go("edit", null); break;
       case "open-order": { const o = st.idx.orders[b.dataset.id].o; go(o.status === "DRAFT" ? "edit" : "detail", o.id); break; }
@@ -705,18 +936,39 @@
 
       case "add-line": st.draft.lines.push(blankLine()); render(); break;
       case "remove-line": st.draft.lines.splice(+b.dataset.i, 1); if (!st.draft.lines.length) st.draft.lines.push(blankLine()); render(); break;
-      case "save-draft": case "submit-draft": {
-        const submit = a === "submit-draft";
+      case "submit-draft": {
+        try { validateDraftNumbers(); checkReadyToSubmit(draftPayload()); } catch (e) { failHere(b, e.message); break; }
+        st.confirm = "submit"; render(); break;
+      }
+      case "save-draft": case "submit-confirm": {
+        const submit = a === "submit-confirm";
         let payload;
-        try { validateDraftNumbers(); payload = draftPayload(); } catch (e) { st.error = e.message; st.flash = null; render(); break; }
+        try { validateDraftNumbers(); payload = draftPayload(); if (submit) checkReadyToSubmit(payload); } catch (e) { st.confirm = null; failHere(b, e.message); break; }
         const id = await run(async () => {
           const newId = await st.store.saveDraft(payload, st.user);
           st.draft.id = newId;
           if (submit) { const n = await st.store.submit(newId, st.user); return { id: newId, n }; }
           return { id: newId };
-        }, (r) => (r.n ? `${r.n} di-submit. Order siap di-receive.` : "Draft disimpan."));
-        if (id && id.n) { st.view = "detail"; st.orderId = id.id; st.draft = null; render(); }
+        }, (r) => (r.n ? `${r.n} berhasil di-submit. Klik "Cetak SPO" untuk mencetak lembar arsip dan supplier.` : "Draft disimpan."));
+        st.confirm = null;
+        if (id && id.n) { st.view = "detail"; st.orderId = id.id; st.draft = null; render(); window.scrollTo(0, 0); }
         else if (id) { st.orderId = id.id; st.draft = makeDraft(id.id); render(); }
+        else render();
+        break;
+      }
+      case "quick-item": st.quickItem = { sku: "", description: "" }; render(); document.getElementById("q-sku")?.focus(); break;
+      case "quick-item-cancel": st.quickItem = null; render(); break;
+      case "quick-item-save": {
+        const q = st.quickItem;
+        const ok = await run(() => st.store.saveItem({ sku: q.sku, description: q.description, unit: "Each", active: true }).then(() => true));
+        if (ok) {
+          const sku = String(q.sku).trim().toUpperCase();
+          const it = st.idx.items.find((i) => i.sku === sku) || { sku, description: q.description, unit: "Each" };
+          let line = st.draft.lines.find((l) => !l.sku);
+          if (!line) { line = blankLine(); st.draft.lines.push(line); }
+          line.sku = it.sku; line.description = it.description; line.unit = it.unit || "Each";
+          st.quickItem = null; setFlash(`SKU ${sku} ditambahkan dan sudah dipilih di tabel.`); render();
+        }
         break;
       }
       case "delete-draft": {
@@ -730,11 +982,17 @@
         break;
       }
 
-      case "act-type": st.act = { type: b.dataset.v, date: S.today(), note: "", vals: {}, amounts: {} }; st.error = null; st.flash = null; render(); break;
+      case "act-type": st.act = { type: b.dataset.v, date: S.today(), note: "", vals: {}, amounts: {} }; st.msgAt = null; render(); break;
       case "act-cancel": st.act = null; render(); break;
+      case "act-fill": {
+        const def = ACTS[st.act.type], t = st.act.type === "QC" ? "QC_PASS" : st.act.type;
+        st.act.vals = {};
+        for (const b2 of Object.values(x.bal)) { const v = def.avail(b2); if (v > 0) st.act.vals[`${b2.line_id}|${b2.size_code}|${t}`] = String(v); }
+        render(); break;
+      }
       case "post-act": {
         let evs;
-        try { evs = buildActEvents(x); } catch (e) { st.error = e.message; st.flash = null; render(); break; }
+        try { evs = buildActEvents(x); } catch (e) { failHere(b, e.message); break; }
         const label = ACTS[st.act.type].label;
         const ok = await run(() => st.store.postEvents(st.orderId, evs, st.act.date, st.act.note, st.user).then(() => true),
           `${label} tersimpan (${evs.length} baris).`);
@@ -755,12 +1013,12 @@
         const url = URL.createObjectURL(new Blob(["﻿" + toCsv()], { type: "text/csv;charset=utf-8" }));
         const link = document.createElement("a"); link.href = url; link.download = name; document.body.appendChild(link); link.click(); link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 2000);
-        st.flash = "CSV dibuat. Kalau tidak terunduh (misalnya di pratinjau), pakai Salin CSV."; render();
+        setFlash("CSV dibuat. Kalau tidak terunduh, pakai Salin CSV."); render();
         break;
       }
       case "csv-copy": {
         const csv = toCsv();
-        try { await navigator.clipboard.writeText(csv); st.flash = "CSV disalin. Tempel di Excel."; render(); }
+        try { await navigator.clipboard.writeText(csv); setFlash("CSV disalin. Tempel di Excel."); render(); }
         catch (e) { render(); const ta = document.getElementById("csv-fallback"); ta.hidden = false; ta.value = csv; ta.focus(); ta.select(); st.flash = null; }
         break;
       }

@@ -7,6 +7,7 @@ Terpisah total dari SP Creator Excel dan dari website inventory butik.
 
 1. **Buat SPO**: satu SKU general per baris, qty dipecah per ukuran (XXS, XS, SS, MM, LL, XL, XXL).
 2. **Submit**: order terkunci dan dapat nomor `SPO-0001`, line `SPO-0001001`.
+   Tombol **Cetak SPO** mencetak 2 lembar A4 (Arsip Internal dan Untuk Supplier). Kop surat diatur di `COMPANY` pada `web/config.js`.
 3. **Receiving**: barang datang dari vendor, masuk antrian QC. Bisa bertahap.
 4. **QC**: hasilnya Pass (receive final), Reject (masuk repair), atau Damaged (tidak bisa diterima lagi).
 5. **Kembali dari repair**: barang reject yang sudah diperbaiki masuk antrian QC lagi.
@@ -82,9 +83,9 @@ Anon key memang aman untuk ditaruh di website. Datanya dilindungi login dan atur
 psql -d spo -f supabase/schema.sql
 psql -d spo -f tests/test_flow.sql
 
-# UI (mode demo)
+# UI (mode demo). Sekali saja: pip install playwright && python -m playwright install chromium
 cd web && python3 -m http.server 8765 &
-python3 tests/ui_test.py
+python3 tests/ui_test.py folder-screenshot
 ```
 
 ## Belum dibuat (tahap berikutnya)

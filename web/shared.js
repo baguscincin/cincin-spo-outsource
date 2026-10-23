@@ -4,7 +4,7 @@
 // =====================================================================
 (function () {
   const EVENT_TYPES = {
-    RECEIVE:         { label: "Received",        short: "RCV",  tone: "info" },
+    RECEIVE:         { label: "Barang datang",   short: "RCV",  tone: "info" },
     QC_PASS:         { label: "QC Pass",         short: "PASS", tone: "good" },
     QC_REJECT:       { label: "QC Reject",       short: "REJ",  tone: "warn" },
     QC_DAMAGED:      { label: "Damaged",         short: "DMG",  tone: "bad" },
@@ -106,11 +106,19 @@
     if (isNaN(dt)) return String(d);
     return dt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" });
   }
+  // Format resmi untuk lembar cetak: 23 Oktober 2026
+  function fmtDateLong(d) {
+    if (!d) return "";
+    const dt = new Date(String(d).length <= 10 ? d + "T00:00:00" : d);
+    if (isNaN(dt)) return String(d);
+    return dt.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+  }
+  const rp = (n) => new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Math.round(Number(n) || 0));
   function today() {
     const d = new Date();
     return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   }
 
   window.SPO = { EVENT_TYPES, STATUS, computeBalances, derive, checkBalances, isDone,
-                 lineQty, netUnitPrice, lineAmount, money, qty, fmtDate, today, r2 };
+                 lineQty, netUnitPrice, lineAmount, money, rp, qty, fmtDate, fmtDateLong, today, r2 };
 })();

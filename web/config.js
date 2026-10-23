@@ -11,4 +11,12 @@ window.SPO_CONFIG = {
 
   // Nama yang tampil di pojok kiri atas
   APP_NAME: "SPO Outsource",
+
+  // Kop surat di lembar cetak SPO. Kosongkan yang tidak ingin tampil.
+  COMPANY: {
+    NAME: "Cin Cin Studio",
+    ADDRESS: "Jalan Sanghyang No 100, Abianbase, Mengwi, Badung, Bali",
+    PHONE: "",
+    EMAIL: "",
+  },
 };
